@@ -1,0 +1,7 @@
+{
+  "port": 8720,
+  "claude_home": "~/.claude",
+  "recap_dir": "~/session_recaps",
+  "archive_dirs": [],
+  "project_roots": ["~"]
+}

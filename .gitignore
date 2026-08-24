@@ -1,0 +1,24 @@
+# --- machine-local data (never commit) ---
+session-manager/notes.json          # your own titles / comments / stars
+session-manager/cache.json          # parse cache, regenerated on demand
+session-manager/state/              # per-session live-status records (hooks)
+session-manager/config.json         # your machine's paths & port
+session-manager/titler/corpus.jsonl
+session-manager/titler/titles.jsonl
+ticket-desk/tickets.json
+ticket-desk/tickets.broken.*.json
+ticket-desk/claude-skill/desk_path.txt
+
+# --- logs / scratch ---
+*.log
+*.bak
+*.bak-*
+*.bak_*
+*.tmp
+_inject_probe.txt
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
