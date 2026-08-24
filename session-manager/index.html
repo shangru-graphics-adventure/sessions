@@ -125,6 +125,10 @@
   .row.live{border-color:var(--ok)}
   .row.wait{border-color:var(--star)}
   .st .doing{color:var(--accent)}
+  /* 重起标题的进度: 挂在每一行自己的 ↻ 旁边 —— 可以同时总结好几个, 各报各的 */
+  .rtprog{font-size:11px;color:var(--accent);margin-left:6px;white-space:nowrap;
+          font-variant-numeric:tabular-nums}
+  .rtprog.slow{color:var(--star)}
   /* 窗口条: 这个对话此刻开在哪几个窗口里 */
   .wins{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px;font-size:11.5px}
   .wins .warn{color:var(--warn);font-weight:600}
@@ -197,7 +201,8 @@
   </select>
   <label class="muted"><input type="checkbox" id="onlyStar" style="vertical-align:-1px"> 只看星标</label>
   <label class="muted"><input type="checkbox" id="onlyLive" style="vertical-align:-1px"> 只看开着的</label>
-  <label class="muted" title="两种都是: 开一个纯 cmd 再把 claude --resume 敲进去(这样 claude 界面才有颜色)。勾上=并进当前终端窗口当新标签页; 不勾=弹独立新窗口"><input type="checkbox" id="dockTab" style="vertical-align:-1px" checked> 并入当前终端窗口</label>
+  <label class="muted" title="勾上: 在 VS Code 里新开一个终端标签页跑 claude --resume(走扩展的 createTerminal, 需要装 vscode-bridge)。不勾: 开 Windows Terminal。VS Code 那边不可用时会自动退回终端并告诉你"><input type="checkbox" id="inVscode" style="vertical-align:-1px" checked> 在 VS Code 里打开</label>
+  <label class="muted" id="dockWrap" title="只对「终端」那条路有效: 开一个纯 cmd 再把 claude --resume 敲进去(这样 claude 界面才有颜色)。勾上=并进当前终端窗口当新标签页; 不勾=弹独立新窗口"><input type="checkbox" id="dockTab" style="vertical-align:-1px" checked> 并入当前终端窗口</label>
   <span id="live" style="color:var(--ok);font-size:12px"></span>
   <span id="poll" style="color:var(--dim);font-size:11px"></span>
   <button id="btnReload">刷新</button>
@@ -443,6 +448,38 @@ function stHtml(s){
     <span class="age">${s.took ? "耗时" + s.took + "s · " : ""}${fresh(a)}</span></div>${wins}`;
 }
 
+// 正在总结标题的行: sid -> {t0, eta}。放在全局而不是闭包里, 是因为列表会被重绘
+// (搜索/刷新), 重绘之后要能把进度和按钮状态原样恢复出来。
+const RETITLING = new Map();
+
+function paintRetitle(){
+  document.querySelectorAll(".row").forEach(row => {
+    const btn = row.querySelector('[data-act="retitle"]');
+    if(!btn) return;
+    const job = RETITLING.get(row.dataset.id);
+    let prog = row.querySelector(".rtprog");
+    if(!job){
+      if(prog) prog.remove();
+      if(btn.classList.contains("busy")){ btn.classList.remove("busy"); btn.textContent = "↻"; }
+      return;
+    }
+    btn.classList.add("busy");
+    const el = (performance.now() - job.t0) / 1000;
+    btn.textContent = Math.round(el) + "s";
+    if(!prog){
+      prog = document.createElement("span");
+      prog.className = "rtprog";
+      btn.after(prog);
+    }
+    const over = el >= job.eta;
+    prog.classList.toggle("slow", over);
+    prog.textContent = over
+      ? `总结中 ${el.toFixed(0)}s（比平常久, 平常约 ${job.eta.toFixed(0)}s）`
+      : `总结中 ${el.toFixed(0)}s · 还要 ${Math.ceil(job.eta - el)}s`;
+  });
+}
+setInterval(() => { if(RETITLING.size) paintRetitle(); }, 250);
+
 function paintStatus(){
   let live = 0;
   document.querySelectorAll(".row").forEach(row => {
@@ -467,6 +504,7 @@ function paintStatus(){
     if(st !== "closed") live++;
   });
   $("#live").textContent = live ? `${live} 个开着` : "";
+  if(RETITLING.size) paintRetitle();          // 列表可能刚被重绘过, 把进度贴回去
   const r = ROWS.find(x => STATUS[x.id] && STATUS[x.id].state === "running");
   document.title = r ? "● 正在跑 — Claude 对话管理器" : "Claude 对话管理器";
 }
@@ -515,26 +553,22 @@ $("#list").addEventListener("click", async e => {
     if(btn.classList.contains("busy")) return;          // 20 秒一次, 别让人连点
     btn.classList.add("busy");
     const t0 = performance.now();
-    // 预计耗时: 用上几次的实测值滑动平均, 没有历史就用 22 秒(README 实测 18-25 秒)。
-    // 一个要等 20 多秒、期间没有任何反馈的按钮, 会让人以为它死了 —— 所以每 250ms
-    // 报一次"已经多久 / 还要多久", 超时之后如实说"比平常久", 不装作还在预估内。
+    // 预计耗时: 用前几次的实测值滑动平均, 没有历史就用 22 秒(README 实测 15-25 秒)。
+    // 一个要等 20 多秒、期间毫无反馈的按钮会让人以为它死了 —— 所以每 250ms 报一次
+    // "已经多久 / 还要多久", 超时之后如实说"比平常久", 不装作还在预估内。
+    // 进度挂在**这一行自己**身上: 后端是多线程的, 可以同时总结好几个对话,
+    // 写全局状态行的话它们会互相覆盖。
     const eta = Math.max(5, +localStorage.getItem("retitleEta") || 22);
-    const tick = setInterval(() => {
-      const el = (performance.now() - t0) / 1000;
-      btn.textContent = Math.round(el) + "s";
-      $("#stat").textContent = el < eta
-        ? `正在用 haiku 总结标题… 已 ${el.toFixed(0)}s · 预计还要 ${Math.ceil(eta - el)}s`
-        : `正在用 haiku 总结标题… 已 ${el.toFixed(0)}s（比平常久, 平常约 ${eta.toFixed(0)}s）`;
-    }, 250);
+    RETITLING.set(id, {t0, eta});
+    paintRetitle();
     let d = {};
     try{
       const r = await fetch("/api/retitle", {method:"POST",
         headers:{"Content-Type":"application/json"}, body: JSON.stringify({id})});
       d = await r.json();
     }catch(err){ d = {ok:false, error:String(err)}; }
-    clearInterval(tick);
-    btn.textContent = "↻";
-    btn.classList.remove("busy");
+    RETITLING.delete(id);
+    paintRetitle();
     if(d.ok && d.ms){                                    // 用真实耗时把预估校准过来
       const next = eta * 0.7 + (d.ms / 1000) * 0.3;
       try{ localStorage.setItem("retitleEta", next.toFixed(1)); }catch(_){}
@@ -565,7 +599,8 @@ $("#list").addEventListener("click", async e => {
     const r = await fetch("/api/resume", {method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({id, cwd: rec.cwd,
-        terminal: $("#dockTab").checked ? "type" : "type-new"})});
+        terminal: $("#inVscode").checked ? "vscode"
+                : ($("#dockTab").checked ? "type" : "type-new")})});
     const d = await r.json();
     if(d.conflict){
       btn.textContent = "⚠ 开着多个";
@@ -573,9 +608,14 @@ $("#list").addEventListener("click", async e => {
     }else if(d.switched){
       btn.textContent = d.ok ? "已切过去" : "切不过去";
       if(!d.ok) $("#stat").textContent = "切不过去: " + (d.why || "系统拒绝了前台切换, 请点任务栏");
+    }else if(d.ok && d.terminal === "vscode"){
+      btn.textContent = "已在 VS Code 打开";
+      $("#stat").textContent = `已在 VS Code 新开终端「${esc(d.tab || "")}」跑 claude --resume`;
     }else{
       btn.textContent = d.ok ? "已弹窗口" : "失败";
-      if(!d.ok) $("#stat").textContent = "Resume 失败: " + (d.why || "未知原因");
+      if(d.ok && d.fell_back)
+        $("#stat").textContent = "VS Code 那边用不了(" + esc(d.fell_back) + "), 已改用终端打开。";
+      else if(!d.ok) $("#stat").textContent = "Resume 失败: " + (d.why || "未知原因");
     }
     setTimeout(() => { btn._busy = false; paintStatus(); }, 2000);
   }
@@ -652,6 +692,18 @@ $("#list").addEventListener("click", async e => {
 
 // 这个开关每次都要手动勾太烦, 记住上次的选择
 try{
+  const iv = localStorage.getItem("inVscode");
+  if(iv !== null) $("#inVscode").checked = iv === "1";
+  const syncDock = () => {
+    const on = $("#inVscode").checked;
+    $("#dockWrap").style.opacity = on ? .45 : 1;      // 只对终端那条路有效, 灰掉免得误解
+    $("#dockWrap").title = on ? "当前走 VS Code, 这个选项不生效" : $("#dockWrap").title;
+  };
+  $("#inVscode").addEventListener("change", () => {
+    try{ localStorage.setItem("inVscode", $("#inVscode").checked ? "1" : "0"); }catch(_){}
+    syncDock();
+  });
+  syncDock();
   const v = localStorage.getItem("dockTab");
   if(v !== null) $("#dockTab").checked = (v === "1");
 }catch(_){}
