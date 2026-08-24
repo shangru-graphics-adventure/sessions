@@ -967,20 +967,27 @@ def focus_win(w):
     if host == "windowsterminal.exe":
         # WT 单窗口多标签共用一个 HWND: 光提前台, 活动的还是原来那个标签(你若有
         # 六个对话开在同一个窗口里, 六个"切过去"会全落在同一个标签上)。所以提前台
-        # 之后按记下的标签标题轮 Ctrl+Tab 找到它。
-        r = actions.focus_wt_tab(hwnd, w.get("title"))
+        # 之后按标签标题轮 Ctrl+Tab 找到它。
+        # 标题**现场直接问那个 claude 进程的控制台**(AttachConsole), 不用记账里的 ——
+        # 记账标题被"Stop 时刻抓到别人标签"污染过一整轮(点谁都切到同一个对话),
+        # 而 GetConsoleTitleW 是权威来源, 谁的控制台谁答话, 不存在张冠李戴。
+        want = actions.console_title_of(w.get("pid")) or w.get("title")
+        r = actions.focus_wt_tab(hwnd, want)
         r["win"] = w
         if r.get("tab"):
             # 标题是唯一的定位手段, 所以**重名标签分不开** —— 同一窗口里有别的对话
             # 顶着同一个标题时(把同一对话开两份就会这样), 轮转会停在先遇到的那个。
             # 分不清就说分不清, 别装作精确。
-            core = actions._title_core(w.get("title"))
+            core = actions._title_core(want)
             dups = 0
             states = load_states()
             alive = alive_pids(all_pids(states))
             for sid2, rec2 in states.items():
                 for w2 in live_windows(rec2, alive):
-                    if w2.get("hwnd") == hwnd and w2.get("pid") != w.get("pid")                             and actions._title_core(w2.get("title")) == core:
+                    # 对方的标题也现场问它的控制台 —— 记账标题清洗后是空串,
+                    # 拿空串互比会把所有标签都误判成重名
+                    if w2.get("hwnd") == hwnd and w2.get("pid") != w.get("pid")                             and core and actions._title_core(
+                                actions.console_title_of(w2["pid"])) == core:
                         dups += 1
             if dups:
                 r["why"] = ("这个窗口里还有 %d 个标签顶着同样的标题, 可能停在了别的"

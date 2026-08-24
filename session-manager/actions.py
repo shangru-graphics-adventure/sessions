@@ -14,6 +14,7 @@ import json
 import time
 import ctypes
 import subprocess
+import sys
 
 import config
 
@@ -433,6 +434,34 @@ def _title_core(t):
     return t
 
 
+def console_title_of(pid, timeout=3.0):
+    """直接问一个控制台进程: 你的标题是什么。
+
+    这就是 WT 标签标题的**权威来源** —— 不经过任何记账, 现在问现在答, 所以不受
+    "hook 在错误时刻抓了别人标题"的污染(那个坑真踩过: 后台对话 Stop 时抓到的是
+    你正看着的标签)。AttachConsole 是进程级状态, 不能在 server 自己身上做(多线程
+    会打架), 起一个一次性子进程去问, ~100ms, focus 这种低频操作花得起。
+    """
+    code = "; ".join([
+        "import ctypes, sys",
+        "k = ctypes.windll.kernel32",
+        "k.FreeConsole()",
+        "sys.exit(1) if not k.AttachConsole(%d) else None" % pid,
+        "b = ctypes.create_unicode_buffer(512)",
+        "k.GetConsoleTitleW(b, 512)",
+        "sys.stdout.buffer.write(b.value.encode('utf-8'))",
+    ])
+    try:
+        r = subprocess.run([sys.executable, "-c", code],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=timeout, creationflags=NO_WINDOW)
+        if r.returncode == 0:
+            return r.stdout.decode("utf-8", "replace").strip()
+    except Exception:
+        pass
+    return ""
+
+
 def focus_wt_tab(hwnd, want_title, max_tabs=16):
     """把一个 Windows Terminal 窗口切到前台, 并轮到标题匹配的那个标签。
 
@@ -462,17 +491,20 @@ def focus_wt_tab(hwnd, want_title, max_tabs=16):
     # 标题(同一对话开两份就会), 那样第二个同名标签会被误判成"回到起点"而提前放弃
     # (实测踩到: 两对重名标签的窗口里, 找一个明明存在的独名标签也会失败)。
     # 老老实实轮满 max_tabs 次, 一次 0.18s, 上限也就 3 秒。
+    seen = []                             # 沿途见到的标签, 失败时报出来辅助诊断
     for _ in range(max_tabs):
         if u32.GetForegroundWindow() != hwnd:
-            return dict(r, tab=False,
+            return dict(r, tab=False, seen=seen,
                         why="轮标签途中焦点被抢走, 已停手(切到了窗口, 标签请自己点)")
         _send([_vk_input(VK_CONTROL), _vk_input(VK_TAB),
                _vk_input(VK_TAB, up=True), _vk_input(VK_CONTROL, up=True)])
         time.sleep(0.18)                  # WT 切标签 + 刷新标题要一拍
         t = cur()
+        if t and t not in seen:
+            seen.append(t)
         if want in t or (t and t in want):
             return dict(r, tab=True, title=window_title(hwnd))
-    return dict(r, tab=False,
+    return dict(r, tab=False, seen=seen,
                 why="轮了 %d 次没遇到标题含「%s」的标签, 标签请自己点" % (max_tabs, want[:20]))
 
 

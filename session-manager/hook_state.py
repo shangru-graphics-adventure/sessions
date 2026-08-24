@@ -333,11 +333,12 @@ def main():
         rec["took"] = round(now - rec.get("started", now), 1)
         if not rec.get("pid"):
             rec.update(find_owner())
-        w = capture_window(rec.get("term_pid"))
-        if w.get("win_title"):          # 标题是 Claude Code 自己写的对话摘要, 存最新的
-            rec["win_title"] = w["win_title"]
-        if w.get("hwnd"):
-            rec["hwnd"] = w["hwnd"]
+        # **Stop 时绝不碰窗口标题。** WT 单窗口多标签下, 窗口标题 = 当前活动标签;
+        # 一个对话在后台跑完时你多半正看着别的标签, 这时抓标题会把**别人的标题**记
+        # 给它。实测后果: 十几个对话的 win_title 全被记成了当时最活跃那个对话的标题,
+        # 于是"切过去"按标题轮转, 点谁都落到同一个标签上。窗口信息只在用户显式操作
+        # 的时刻记 —— UserPromptSubmit(刚敲完回车)与 SessionStart(刚启动), 那两个
+        # 时刻前台就是它本人。
         merge_proc(rec, {k: rec.get(k) for k in
                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
                           "shell_pid", "shell_name")})
