@@ -277,6 +277,43 @@ SHELLS = ("powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "zsh.exe", "sh.ex
           "git-bash.exe", "nu.exe", "fish.exe")
 
 
+def reset_console(pid, timeout=3.0):
+    """把一个控制台从"claude 被强杀后的残留状态"里救出来。
+
+    claude(TUI)开着鼠标上报/括号粘贴/备用屏; 它**正常退出会自己关**, 被我们
+    terminate 就来不及了 —— 于是那个标签回到 shell 提示符后, 鼠标一动就满屏
+    `[555;170;45M` 这种上报序列(实测截图)。杀完人要打扫: AttachConsole 到那个
+    shell, 往 CONOUT$ 写一串 VT 关闭序列(关鼠标上报/括号粘贴, 显示光标, 退备用屏)。
+    写到输出端就够了 —— ConPTY 会把序列转发给 WT/VS Code 前端, 状态存在前端那侧。
+    """
+    seq = "".join(chr(27) + x for x in (
+        "[?1000l", "[?1002l", "[?1003l", "[?1006l",   # 各级鼠标上报
+        "[?2004l",                                    # 括号粘贴
+        "[?25h",                                      # 光标显示回来
+        "[?1049l",                                    # 退出备用屏
+        "[0m",                                        # 属性复位
+    ))
+    code = "; ".join([
+        "import ctypes, sys",
+        "k = ctypes.windll.kernel32",
+        "k.FreeConsole()",
+        "sys.exit(1) if not k.AttachConsole(%d) else None" % pid,
+        "h = k.CreateFileW('CONOUT$', 0xC0000000, 3, None, 3, 0, None)",
+        "m = ctypes.c_uint()",
+        "k.GetConsoleMode(h, ctypes.byref(m))",
+        "k.SetConsoleMode(h, m.value | 4)",           # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        "n = ctypes.c_uint()",
+        "k.WriteConsoleW(h, %r, %d, ctypes.byref(n), None)" % (seq, len(seq)),
+    ])
+    try:
+        r = subprocess.run([sys.executable, "-c", code],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=timeout, creationflags=NO_WINDOW)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
                  term_name=None, kill_shell=False, timeout=5.0):
     """结束一个对话进程(以及它派生的子进程)。
@@ -319,13 +356,13 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
         if ctime is not None and abs(p.create_time() - float(ctime)) >= 2.0:
             return {"ok": False, "why": "pid %s 的创建时间对不上(它已经被系统回收给别的进程了)" % pid}
         kids = p.children(recursive=True)
+        parent = p.parent()               # 杀之前取 —— 杀完就查不到了
         shell = None
         shell_why = ""
         if kill_shell:
-            par = p.parent()
-            pname = (par.name() or "").lower() if par else ""
-            if par and pname in SHELLS:
-                shell = par
+            pname = (parent.name() or "").lower() if parent else ""
+            if parent and pname in SHELLS:
+                shell = parent
             else:
                 shell_why = ("父进程是 %s, 不在已知 shell 名单里 —— 只关对话, 不动它"
                              % (pname or "?"))
@@ -350,6 +387,13 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
         psutil.wait_procs(alive, timeout=2.0)
 
     out = {"ok": True, "killed": len(gone) + len(alive), "children": len(kids)}
+    # 留下来的 shell 要打扫(见 reset_console); 连 shell 一起杀了就没这回事
+    if parent is not None and not kill_shell:
+        try:
+            if parent.is_running():
+                out["console_reset"] = reset_console(parent.pid)
+        except Exception:
+            pass
     if kill_shell:
         out["shell_killed"] = bool(shell)
         if shell_why:
