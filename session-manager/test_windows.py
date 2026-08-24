@@ -262,6 +262,47 @@ def main():
             fh.write("{ 这不是 json")
         check("坏 json 不炸也不覆盖", actions.trust_folder(newdir, fake) is False
               and io.open(fake, encoding="utf-8").read().startswith("{ 这不是"))
+        print("7) VS Code 桥: 挨个端口问过去, 问错窗口不算错")
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import config as cfg
+
+        def fake_bridge(port, answer):
+            class H(BaseHTTPRequestHandler):
+                def log_message(self, *a):
+                    pass
+
+                def do_POST(self):
+                    n = int(self.headers.get("Content-Length") or 0)
+                    self.rfile.read(n)
+                    body = json.dumps(answer).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+            srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            return srv
+
+        base, span = 8891, 4
+        old_port, old_span = cfg.VSCODE_BRIDGE_PORT, cfg.VSCODE_BRIDGE_SPAN
+        cfg.VSCODE_BRIDGE_PORT, cfg.VSCODE_BRIDGE_SPAN = base, span
+        srvs = []
+        try:
+            check("一个桥都没有 -> None", actions.bridge("/show", {"pid": 1}) is None)
+            # 第一个窗口里没有这个终端, 第二个有
+            srvs.append(fake_bridge(base, {"ok": False, "why": "这个窗口里没有"}))
+            r = actions.bridge("/show", {"pid": 1})
+            check("只有一个桥且说没有 -> 如实转达", r is not None and r.get("ok") is False, str(r)[:60])
+            srvs.append(fake_bridge(base + 2, {"ok": True, "shown": "powershell"}))
+            r = actions.bridge("/show", {"pid": 1})
+            check("段里有一个说 ok -> 用它", r is not None and r.get("ok") is True, str(r)[:60])
+        finally:
+            for x in srvs:
+                x.shutdown()
+            cfg.VSCODE_BRIDGE_PORT, cfg.VSCODE_BRIDGE_SPAN = old_port, old_span
+
     finally:
         cleanup(spawned, tmp)
 

@@ -36,6 +36,8 @@ Python 3.8+。**唯一的第三方包是 `psutil`** —— "这个对话的进�
 | `project_roots` | `SESSIONS_PROJECT_ROOTS` | `~` |
 | `auto_trust` | `SESSIONS_AUTO_TRUST` | `true` — resume 前把目标目录标成已信任 |
 | `claude_procs` | `SESSIONS_CLAUDE_PROCS` | `claude.exe` — 判断"还开着吗"认哪些进程名 |
+| `vscode_bridge_port` | `SESSIONS_VSCODE_BRIDGE_PORT` | `8721` — VS Code 桥的端口 |
+| `vscode_bridge_span` | `SESSIONS_VSCODE_BRIDGE_SPAN` | `8` — 往后试几个(每个 IDE 窗口占一个) |
 
 后两个只影响"能不能找到 markdown 版逐字记录", 见文末「可选」一节。
 
@@ -336,8 +338,8 @@ claude.exe -> powershell.exe -> Code.exe(渲染进程, 无窗口) -> Code.exe(�
 | 多窗口告警 | **照常** | 同上; 同一 IDE 窗口里的多个标签共用 term_pid, 兄弟检测也因此有效 |
 | `✕ 关闭` 结束对话 | **照常**(实测: 进程与子进程都收干净) | 杀的是那棵 pid 树 |
 | `✕ 关闭` 顺手关窗 | **不会做** | 见下 |
-| `⇥ 切过去` | **能切到 VS Code 窗口, 到不了具体标签页** | 句柄是 IDE 主窗口, 多个标签共用它 |
-| 关掉标签页本身 | **不做**(可以做, 见下) | 要杀的是标签的 shell 而不是 claude |
+| `⇥ 切过去` | 默认切到 IDE 窗口; **装了 [`vscode-bridge/`](../vscode-bridge/) 就能点到具体标签页** | 标签没有 HWND, 只有扩展 API 够得着 |
+| 关掉标签页本身 | **`✕ 连标签页` 按钮** | 走扩展的 `dispose()`, 没装则杀掉标签自己的 shell |
 | `Resume` 新开 | 开的是 **Windows Terminal**, 不是 VS Code 终端 | 没有干净的 CLI 能"在 VS Code 里新开终端并把命令敲进去" |
 
 hook 认的终端(那个渲染进程)**自己没有窗口**, 所以 `capture_window` 找不到句柄时会
@@ -373,23 +375,32 @@ VS Code 里就会给**编辑器主窗口**发 WM_CLOSE —— 关掉你整个 ID
 我们是 terminate 掉 shell 的, 退出码非零, 所以你可能会看到那条通知。它只是通知,
 不影响标签页被收掉。
 
-### 为什么切不到具体那个标签页
+### 切到具体那个标签页: 装 [`vscode-bridge/`](../vscode-bridge/)
 
-不是没找到办法, 是**官方就没提供**: VS Code 文档里没有任何 CLI 参数或 URI handler 能
-聚焦某个终端(见 Terminal 文档与 CLI 文档)。Windows 这一层也给不了 —— 标签不是窗口,
-没有自己的 HWND。
+Windows 这一层给不了 —— 标签不是窗口, 没有自己的 HWND; VS Code 也**没有提供任何 CLI
+参数或 URI handler** 能聚焦某个终端(查过官方文档)。唯一干净的路是扩展 API, 所以仓库里
+带了一个巴掌大的扩展(两个文件, 零依赖), 装法见它自己的 README。
 
-真要做到, 唯一干净的路是**写一个巴掌大的 VS Code 扩展**。扩展 API 三件套是齐的:
+闭环靠的是一个巧合般的对齐: 扩展 API 的 `Terminal.processId` **正好就是本工具一直在追踪
+的那个 shell pid**(claude 进程的父)。实测对上了:
 
-| API | 作用 |
-|---|---|
-| `window.terminals` | 枚举当前打开的终端 |
-| `Terminal.processId` | 该终端 shell 进程的 OS pid |
-| `Terminal.show(preserveFocus?)` | 把这个终端显示出来 |
+```
+桥:      {"terminals":[{"pid":45848,"name":"powershell","active":true}]}
+hook:    shell pid=45848 powershell.exe  (claude 的父进程)
+```
 
-而 `Terminal.processId` **正好就是我们已经掌握的那个 pid**(claude 的父 shell) —— 扩展只要
-监听一个本地端口, 收到 pid 就 `terminals.find(t => t.processId === pid).show()`, 闭环就成了。
-本仓库暂时没有做这个扩展。
+装了之后:
+
+- `⇥ 切过去` 直接把**那个终端标签页**显示出来(`Terminal.show()`), 再顺手把 IDE 窗口切到前台
+- `✕ 连标签页` 改走 `Terminal.dispose()` —— VS Code 自己的关法, 标签干干净净消失,
+  不会留下"terminal process terminated with exit code"那条提示(杀 shell 的兜底做法会)
+
+**没装完全不影响别的功能**: `actions.bridge()` 连不上就返回 None, 一切退回原来的行为。
+超时 1.2 秒且总额有上限 —— 这是"有更好就用"的增强, 不能因为它让页面卡住。
+
+多个 VS Code 窗口时, 每个窗口跑一份桥、各占端口段里的一个, 管理器挨个端口问过去;
+问到别的窗口只会得到 `ok:false`("这个窗口里没有这个终端"), **没有副作用**, 所以顺序试
+是安全的。相关配置: `vscode_bridge_port`(默认 8721) / `vscode_bridge_span`(默认 8)。
 
 ### 另一个官方行为要知道(**[外部先验]**, 未实测)
 

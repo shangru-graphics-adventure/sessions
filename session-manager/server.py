@@ -518,7 +518,7 @@ def load_states():
 
 
 PROC_KEYS = ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title",
-             "win_owner")
+             "win_owner", "shell_pid", "shell_name")
 
 
 def rec_procs(rec):
@@ -554,6 +554,10 @@ def live_windows(rec, alive):
             # 这个 HWND 实际属于谁。VS Code 里终端宿主是没有窗口的渲染进程,
             # 句柄来自它的祖先(IDE 主窗口), 切过去只能切到窗口、到不了标签页。
             "owner": e.get("win_owner") or "",
+            # 承载这个对话的 shell。VS Code 里它 == 扩展 API 的 Terminal.processId,
+            # 有它才能精确点到具体哪个终端标签页。
+            "shell_pid": e.get("shell_pid"),
+            "shell": e.get("shell_name") or "",
             "ts": e.get("ts"),
         })
     return out
@@ -888,6 +892,36 @@ def _find_window(title, timeout=8.0):
     return 0
 
 
+def focus_win(w):
+    """把一个窗口切到前台。IDE 里再往前走一步: 精确点到那个终端标签页。
+
+    VS Code 的终端标签没有 HWND(一个 IDE 窗口里所有标签共用一个句柄), 所以 Windows
+    这一层最多只能把 IDE 窗口切到前台。装了 vscode-bridge 那个扩展就不一样了 ——
+    它用扩展 API 的 `Terminal.show()` 直接显示那个终端, 而它认的 `Terminal.processId`
+    实测就等于我们记的 shell pid。桥不在(没装/没开/别的窗口占了端口)就安静退回原来
+    的行为。
+    """
+    host = (w.get("owner") or w.get("term") or "").lower()
+    if host == "code.exe" and w.get("shell_pid"):
+        via = actions.bridge("/show", {"pid": w["shell_pid"]})
+        if via and via.get("ok"):
+            # 标签显示出来了, 但 IDE 窗口本身可能还在后台, 顺手也切一下
+            actions.focus_window(w.get("hwnd"))
+            return {"ok": True, "how": "vscode-bridge", "win": w,
+                    "title": via.get("shown") or "", "tab": True}
+        if via:
+            return {"ok": False, "win": w, "how": "vscode-bridge",
+                    "why": via.get("why") or "桥说它找不到这个终端"}
+    r = actions.focus_window(w.get("hwnd"))
+    r["win"] = w
+    if not w.get("hwnd"):
+        r["why"] = "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]
+    elif r.get("ok") and host == "code.exe":
+        r["why"] = ("切到了 VS Code 窗口, 但到不了具体哪个标签页 —— "
+                    "装上 vscode-bridge 扩展就能精确点到")
+    return r
+
+
 def windows_of(sid):
     """某一个对话此刻开着的窗口。给 resume / 切过去 / 关闭 三个动作共用。"""
     rec = load_states().get(sid) or {}
@@ -926,10 +960,8 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
                     "why": "这个对话已经开在 %d 个窗口里了 —— 先关到只剩一个"
                            % len(wins)}
         if len(wins) == 1:
-            r = actions.focus_window(wins[0].get("hwnd"))
-            r.update({"switched": True, "win": wins[0]})
-            if not r.get("ok") and not wins[0].get("hwnd"):
-                r["why"] = "它开着(pid %s), 但没记到窗口句柄 —— 请自己切过去" % wins[0]["pid"]
+            r = focus_win(wins[0])
+            r["switched"] = True
             return r
 
     title = "claude %s" % sid[:8]
@@ -1118,11 +1150,7 @@ class Handler(BaseHTTPRequestHandler):
             if w is None:
                 return self._send(200, {"ok": False, "conflict": True, "wins": wins,
                                         "why": "开着 %d 个窗口, 要指明切哪一个" % len(wins)})
-            r = actions.focus_window(w.get("hwnd"))
-            r["win"] = w
-            if not w.get("hwnd"):
-                r["why"] = "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]
-            return self._send(200, r)
+            return self._send(200, focus_win(w))
 
         if u.path == "/api/close":
             # 结束这个对话的进程。close_terminal 只在该终端窗口里没有别的已知对话时才做。
@@ -1144,16 +1172,27 @@ class Handler(BaseHTTPRequestHandler):
                       if x.get("term_pid") and x["term_pid"] == w.get("term_pid")
                       and x["pid"] != pid]
             want_term = bool(data.get("close_terminal", True))
+            want_tab = bool(data.get("close_tab"))
+            # 关标签页优先走桥: VS Code 自己 dispose() 掉的标签干干净净, 不会留下
+            # "terminal process terminated with exit code" 那条提示(我们杀 shell
+            # 是非零退出码)。桥不在就退回杀 shell, 结果一样只是多一条提示。
+            via = None
+            if want_tab and w.get("shell_pid") and                     (w.get("owner") or w.get("term") or "").lower() == "code.exe":
+                via = actions.bridge("/close", {"pid": w["shell_pid"]})
             r = actions.close_claude(pid, ct, hwnd=w.get("hwnd"),
                                      close_terminal=want_term and not others,
                                      term_name=w.get("term"),
-                                     kill_shell=bool(data.get("close_tab")))
+                                     kill_shell=want_tab and not (via and via.get("ok")))
+            if via and via.get("ok"):
+                r["tab_closed"] = "vscode-bridge"
             r["siblings"] = len(others)
             if others and want_term:
                 r["note"] = ("这个终端窗口里还开着 %d 个别的对话, 所以只结束了这一个, "
                              "窗口留着" % len(others))
             elif r.get("shell_why"):
                 r["note"] = r["shell_why"]
+            elif r.get("tab_closed"):
+                r["note"] = "标签页由 VS Code 自己关掉了(干净, 没有退出码提示)"
             elif r.get("shell_killed"):
                 r["note"] = "连它所在的终端标签页一起关了"
             elif r.get("term_kept"):

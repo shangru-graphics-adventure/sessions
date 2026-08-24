@@ -94,6 +94,41 @@ def focus_window(hwnd):
         return {"ok": False, "why": str(e)}
 
 
+def _bridge_one(port, path, body=None, timeout=1.2):
+    import urllib.request
+    url = "http://127.0.0.1:%d%s" % (port, path)
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None                     # 没装扩展是常态, 不是错误
+
+
+def bridge(path, body=None, timeout=1.2):
+    """跟 VS Code 桥说话(vscode-bridge/ 那个扩展)。没装 / 没开就返回 None。
+
+    **每个 VS Code 窗口跑一份桥**, 各占端口段里的一个, 所以这里挨个端口问过去,
+    直到某一个说 ok —— 问到别的窗口只会得到 `ok:false`("这个窗口里没有这个终端"),
+    没有任何副作用, 所以顺序试是安全的。
+
+    超时给得很短且总额有上限: 这是个"有更好就用, 没有就算了"的增强, 绝不能因为它
+    让页面卡住。
+    """
+    first = None
+    for i in range(max(1, config.VSCODE_BRIDGE_SPAN)):
+        r = _bridge_one(config.VSCODE_BRIDGE_PORT + i, path, body, timeout)
+        if r is None:
+            continue                    # 这个端口没人监听
+        if r.get("ok"):
+            return r
+        first = first or r              # 记下第一个"在, 但不是它"的回答
+    return first
+
+
 def trust_folder(cwd, path=None):
     """把这个目录标记成"已信任", 免得 resume 出来第一屏是 trust 对话框。
 

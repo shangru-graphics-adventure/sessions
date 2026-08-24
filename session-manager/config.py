@@ -98,6 +98,16 @@ CLOSABLE_TERMS = tuple(n.lower() for n in _cfg.get("closable_terms", [
 ]))
 
 
+# VS Code 桥(vscode-bridge/ 那个扩展)监听的本地端口。装了它, "切过去"就能精确点到
+# 具体那个终端标签页, 而不是只能把 IDE 窗口切到前台 —— 标签没有 HWND, Windows 这层
+# 给不了, 只有扩展 API 能做。没装就自动退回原来的行为, 不影响任何别的功能。
+VSCODE_BRIDGE_PORT = int(os.environ.get("SESSIONS_VSCODE_BRIDGE_PORT")
+                         or _cfg.get("vscode_bridge_port") or 8721)
+# 每个 VS Code 窗口占端口段里的一个。挨个问过去, 问错窗口只会得到 ok:false(无副作用)。
+VSCODE_BRIDGE_SPAN = int(os.environ.get("SESSIONS_VSCODE_BRIDGE_SPAN")
+                         or _cfg.get("vscode_bridge_span") or 8)
+
+
 def project_slug(path):
     """Claude Code's directory name for a cwd: every non-alphanumeric char -> '-'.
 
