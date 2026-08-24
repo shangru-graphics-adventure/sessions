@@ -1,0 +1,5 @@
+# 跨机器一致的行尾: 文本一律以 LF 入库, 检出时按平台还原。
+# .cmd 必须是 CRLF —— 老式批处理解释器对 LF 行尾的多行结构会出怪问题。
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

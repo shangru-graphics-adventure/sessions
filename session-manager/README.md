@@ -17,7 +17,9 @@ python server.py
 
 然后开 http://localhost:8720/
 
-Python 3.8+, **零第三方依赖**(只有 `test_inject.py` / `bench_pids.py` 用到 `psutil`)。
+Python 3.8+。**唯一的第三方包是 `psutil`** —— "这个对话的进程还在吗"只有它能干净地回答。
+不装的话列表 / 搜索 / 预览 / resume 全都正常, 只是实时状态徽章与窗口感知(切过去 / 关闭)
+会静默失效。要那部分就 `pip install psutil`。
 **Windows only** —— 窗口定位、`explorer /select`、Windows Terminal 那一套都是 Win32 API。
 
 ### 配置(可选)
@@ -32,6 +34,8 @@ Python 3.8+, **零第三方依赖**(只有 `test_inject.py` / `bench_pids.py` �
 | `recap_dir` | `SESSIONS_RECAP_DIR` | `~/session_recaps` |
 | `archive_dirs` | `SESSIONS_ARCHIVE_DIRS` | 空 |
 | `project_roots` | `SESSIONS_PROJECT_ROOTS` | `~` |
+| `auto_trust` | `SESSIONS_AUTO_TRUST` | `true` — resume 前把目标目录标成已信任 |
+| `claude_procs` | `SESSIONS_CLAUDE_PROCS` | `claude.exe` — 判断"还开着吗"认哪些进程名 |
 
 后两个只影响"能不能找到 markdown 版逐字记录", 见文末「可选」一节。
 
@@ -249,13 +253,102 @@ python install_hooks.py --remove   # 卸(只删本工具那几条, 不碰你原�
 ### 测试
 
 ```
-python test_hook.py      # hook 本身: 四个事件 + 编码 + 异常输入, 带耗时
-python test_status.py    # 端到端: hook 写账 -> server 合成 -> /api/status, 含 pid 复用防护
-python bench_pids.py     # 进程存活检测的方案对比
+python test_hook.py         # hook 本身: 各个事件 + 编码 + 异常输入, 带耗时
+python test_status.py <sid> # 端到端: hook 写账 -> server 合成 -> /api/status, 含 pid 复用防护
+python test_windows.py 8799 # 多窗口检测 / 切过去 / 关闭 / 自动 trust (29 项)
+python bench_pids.py        # 进程存活检测的方案对比
 ```
+
+`test_windows.py` **不碰任何真实对话**: 它把 `python.exe` 复制成 `claude.exe` 起两个睡着的
+假进程, 再让 server 去关它们 —— 走的是完整的真实代码路径, 但不可能误伤你正开着的窗口。
+建议用一个空 state 目录、跑在别的端口上(`SESSIONS_PORT=8799 python server.py`)。
 
 hook 单次耗时实测 196-486 ms(`UserPromptSubmit` 最慢, 因为要爬父进程链), 全部 `async`,
 不阻塞你输入。
+
+## 同一个对话开在多个窗口里
+
+`claude --resume <id>` 是可以对同一个 id 开好几遍的 —— 开出来的每个窗口都写**同一份**
+jsonl。这不是"多开了几个终端"那么无害: 两边的记录会互相覆盖。
+
+所以 Resume 这个按钮有三种结局, **由后端按此刻实际开着几个窗口来决定**, 前端不自己猜:
+
+| 开着几个 | 按钮显示 | 点下去 |
+|---|---|---|
+| 0 | `Resume` | 照旧: 开新标签页, 把 `claude --resume` 敲进去 |
+| 1 | `⇥ 切过去` | 切到那个窗口(不新开)。切不过去时如实说"系统拒绝了前台切换, 请点任务栏" |
+| ≥2 | `⚠ 开着 N 个` | 拒绝, 并在状态条下面把它们一个个列出来 |
+
+多窗口时状态条会变成告警色, 下面一行是这样的:
+
+```
+⚠ 同一个对话开在 2 个窗口里 — 它们写同一份记录会互相覆盖, 请关到只剩一个:
+   [◐ 看盘工具重构  pid 11240  ⇥ 切过去  ✕ 关闭] [◑ 看盘工具重构  pid 31728  ⇥ 切过去  ✕ 关闭]
+```
+
+### ✕ 关闭做了什么(以及故意没做什么)
+
+**动手前先验明正身**, 这是硬约束: 进程名必须在 `claude_procs` 里, 创建时间必须和记账时
+对得上(±2s)。pid 会被系统回收再分配 —— 少了这一步, 一个早退出的对话的旧 pid 可能已经
+属于别人的进程, "关窗口"就变成了随机杀进程。三道闸都有回归测试。
+
+- 关的是**那个 claude 进程连同它派生的子进程**(一棵 pid 树), 和你直接关掉终端窗口的效果一致。
+- 该终端窗口里**没有别的已知对话**时, 进程收干净后再给窗口发一个 `WM_CLOSE`, 空标签页也一并收掉;
+  **有别的对话就绝不关窗** —— Windows Terminal 是单窗口多标签, 关窗会连带关掉别人的对话。
+  这种情况接口会明说"这个终端窗口里还开着 N 个别的对话, 所以只结束了这一个"。
+- **永远不用窗口标题当 `taskkill` 的过滤条件。** 那个过滤器在 Win10+ 上会静默失效并杀光同名
+  进程 —— 本文档后面记着这笔学费。
+
+### 它靠什么知道"开着几个窗口"
+
+靠 hook。`state/<sid>.json` 里存的是一个 `procs` 数组而不是单个 pid:
+
+```json
+"procs": [{"pid": 11240, "pid_ctime": 1787511544.5, "term_pid": 13108,
+           "term_name": "WindowsTerminal.exe", "hwnd": 65946, "win_title": "◐ 看盘工具重构"}]
+```
+
+多个窗口共用一个 session_id, 写的是同一个 state 文件, 所以**必须是数组** —— 只留一个 pid 的话
+后开的会把先开的顶掉, 页面上永远只看得见最后活动的那个, 而另外几个恰恰是要提醒你去关掉的。
+
+`SessionStart` hook 也是为这个装的: 它是"这个对话又被开到一个新窗口里了"的**最早**信号。
+没有它, 一个刚 resume 出来还没说话的窗口不会被记上, 而"你已经开着一个了"的提醒恰恰要在你
+重复 resume 之前给出来。
+
+**没装 hook 的话这一整节都不生效** —— 页面会退回"每次点 Resume 都新开一个"的老行为。
+
+## Resume 前自动信任目录
+
+新窗口里 `claude` 起来时, 如果这个目录没被信任过, 第一屏是
+"Do you trust the files in this folder?", 敲进去的 `claude --resume` 会卡在那儿等你按 y。
+
+所以 resume 之前先把目标目录标成已信任。实测(2026-08-24)它存在 `~/.claude.json` 里:
+
+```json
+{"projects": {"C:/Users/me/work": {"hasTrustDialogAccepted": true}}}
+```
+
+两个实测出来的细节: key 用**正斜杠**且没有结尾斜杠(写成反斜杠认不出来, 对话框照样弹);
+这个文件是 Claude Code 自己在维护的, 所以**只翻这一个布尔字段, 其余内容原样回写**, 并且
+先写 `.tmp` 再 `os.replace` 原子替换。坏 json / 文件不存在都只是返回 False, 绝不因此让
+resume 失败 —— 大不了你自己点一下那个对话框。
+
+只在你**按下 Resume 的那一刻**、针对**那一个目录**做; 切到已有窗口那条路不碰它。
+不想要就 `config.json` 里 `"auto_trust": false`(或 `SESSIONS_AUTO_TRUST=0`)。
+
+## 换一台机器: 编码
+
+Python 的 `sys.stdout` 编码跟随控制台 code page。开发机 `chcp` 是 65001 时一切正常, 换一台
+默认是 1252(西欧)或 936(GBK)的机器, 同一份代码 print 中文就会 `UnicodeEncodeError`, 或者
+悄悄打出一堆问号 —— 后者更坏, 因为它不报错。
+
+`utf8_console.enable()` 在每个入口脚本开头做两件互不依赖的事: 把 stdout/stderr 换成
+UTF-8(`errors="replace"`, 宁可显示成 `?` 也绝不让一条日志把程序打崩), 再顺手把控制台输出
+code page 设成 65001。没有控制台(pythonw / 重定向到文件)时静默跳过。
+
+`start.cmd` 另外设了 `PYTHONUTF8=1`(PEP 540) —— 那条更彻底, 连子进程和默认文件编码一起管。
+
+(hook 读 stdin 那一侧的编码坑是另一回事, 见下面"两个踩过的坑"。)
 
 ## 两个必须知道的坑
 

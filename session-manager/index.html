@@ -125,6 +125,17 @@
   .row.live{border-color:var(--ok)}
   .row.wait{border-color:var(--star)}
   .st .doing{color:var(--accent)}
+  /* 窗口条: 这个对话此刻开在哪几个窗口里 */
+  .wins{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px;font-size:11.5px}
+  .wins .warn{color:var(--warn);font-weight:600}
+  .win{display:inline-flex;align-items:center;gap:5px;padding:2px 6px;
+       border:1px solid var(--accent-line);background:var(--accent-soft);border-radius:5px}
+  .win .wt{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2)}
+  .win .wp{color:var(--dim);font-size:11px}
+  .win button{padding:1px 6px;font-size:11px;line-height:1.5}
+  .win button.danger{color:var(--warn);border-color:var(--pink-line)}
+  .win button.danger.armed{background:var(--warn);border-color:var(--warn);color:#fff}
+  .st-multi{border-color:var(--warn)}
   .st .txt b{color:var(--dim);font-weight:400}
   .st-stale{background:var(--warn-bg);border-color:var(--warn)}
   .st-stale .dot,.st-stale .lab{color:var(--warn)}
@@ -198,8 +209,10 @@
     <b>状态徽章</b>(hook 实时记账 + 进程存活双重判定): <span style="color:var(--ok)">● 正在跑</span> = 你刚提交、Claude 在干活;
     <span style="color:var(--star)">● 等你确认</span> = 卡在权限/选择上;
     <span style="color:var(--accent)">● 开着·等你</span> = 窗口开着但空闲。没有徽章 = 进程已经没了(窗口关了)。
-    <br>点 <b>Resume</b> 弹一个新 Windows Terminal 窗口, 自动 cd 回原目录再 <code>claude --resume</code> ——
-    <b>别 resume 还带着徽章的那几个</b>(它们还开着, 会冲突)。标题和注释填完点别处自动保存。
+    <br>点 <b>Resume</b> 弹一个新 Windows Terminal 窗口, 自动 cd 回原目录再 <code>claude --resume</code>。
+    <b>这个对话已经开着的话, 同一个按钮变成「⇥ 切过去」</b>, 直接切到那个窗口而不是再开一个 ——
+    两个窗口 resume 同一个对话会写同一份记录、互相覆盖。真开了多个时, 状态条下面会把它们
+    一个个列出来, 每个后面带「切过去 / ✕ 关闭」。标题和注释填完点别处自动保存。
   </div>
   <div id="list"></div>
 </main>
@@ -358,6 +371,23 @@ function fresh(sec){
   return Math.floor(sec/3600) + "小时前";
 }
 
+function winsHtml(s){
+  // 这个对话此刻开在哪几个窗口里。0 个不显示; 1 个给"切过去"; 2 个以上是要修的问题:
+  // 两个窗口 resume 同一个对话, 写的是同一份 jsonl, 会互相覆盖。
+  const w = (s && s.wins) || [];
+  if(!w.length) return "";
+  const one = x => `<span class="win">`
+    + `<span class="wt">${esc(x.title || x.term || "终端窗口")}</span>`
+    + `<span class="wp">pid ${x.pid}</span>`
+    + `<button data-act="focus" data-pid="${x.pid}" title="把这个窗口切到前台">⇥ 切过去</button>`
+    + `<button class="danger" data-act="close" data-pid="${x.pid}"
+               title="结束这个对话的进程(连同它派生的子进程); 该终端窗口里没有别的对话时, 窗口也一并关掉">✕ 关闭</button>`
+    + `</span>`;
+  if(w.length === 1) return `<div class="wins">${one(w[0])}</div>`;
+  return `<div class="wins"><span class="warn">⚠ 同一个对话开在 ${w.length} 个窗口里 —
+    它们写同一份记录会互相覆盖, 请关到只剩一个:</span>${w.map(one).join("")}</div>`;
+}
+
 function stHtml(s){
   if(!s || s.state === "closed") return "";      // 已关闭的不占地方
   // act_age = jsonl 最后一条记录距今多久(工具级实时);  age = hook 记账距今多久(回合级)
@@ -366,6 +396,9 @@ function stHtml(s){
   // 只有拿到了工具级时间戳才敢说"卡住了"; 光凭回合级时间会把正常的长任务误判
   const stale = s.state === "running" && hasAct && a > 120;
   const fr = `<span class="age" title="这条信息的新鲜度">${fresh(a)}</span>`;
+
+  const wins = winsHtml(s);
+  const multi = ((s.wins || []).length > 1) ? " st-multi" : "";
 
   if(s.state === "running"){
     let doing = "";
@@ -377,21 +410,21 @@ function stHtml(s){
       doing = `<span class="doing">正在输出: ${esc(s.act_brief)}</span>`;
     else if(s.act_kind === "user")
       doing = `<span class="doing">刚收到你的消息, 还没动手</span>`;
-    return `<div class="st st-running${stale ? " st-stale" : ""}"><span class="dot">●</span>
+    return `<div class="st st-running${stale ? " st-stale" : ""}${multi}"><span class="dot">●</span>
       <span class="lab">${stale ? "正在跑?" : "正在跑"}</span>
       <span class="txt"><b>目标:</b> ${s.goal ? esc(s.goal) : "目的未概括"}${doing ? " ｜ " + doing : ""}</span>
-      ${fr}</div>`;
+      ${fr}</div>${wins}`;
   }
   if(s.state === "waiting")
-    return `<div class="st st-waiting"><span class="dot">●</span>
+    return `<div class="st st-waiting${multi}"><span class="dot">●</span>
       <span class="lab">等你确认</span>
       <span class="txt">${esc(s.note || "Claude 在等你选择")}</span>
-      ${fr}</div>`;
+      ${fr}</div>${wins}`;
   // done 且进程还活着 = 窗口开着, 空闲等你说话
-  return `<div class="st st-done"><span class="dot">●</span>
+  return `<div class="st st-done${multi}"><span class="dot">●</span>
     <span class="lab">开着·等你</span>
     <span class="txt">${s.result ? "已完成: " + esc(s.result) : "已完成"}</span>
-    <span class="age">${s.took ? "耗时" + s.took + "s · " : ""}${fresh(a)}</span></div>`;
+    <span class="age">${s.took ? "耗时" + s.took + "s · " : ""}${fresh(a)}</span></div>${wins}`;
 }
 
 function paintStatus(){
@@ -399,9 +432,18 @@ function paintStatus(){
   document.querySelectorAll(".row").forEach(row => {
     const s = STATUS[row.dataset.id];
     const box = row.querySelector(".stbox");
-    if(box){
+    // 正在等"再点一次确认关闭"时不重绘, 否则 2 秒一次的轮询会把确认态刷掉
+    if(box && !box._armed){
       const html = stHtml(s);
       if(box._h !== html){ box.innerHTML = html; box._h = html; }
+    }
+    const go = row.querySelector('[data-act="resume"]');
+    if(go && !go._busy){
+      const n = (s && s.wins || []).length;
+      go.textContent = n === 0 ? "Resume" : (n === 1 ? "⇥ 切过去" : `⚠ 开着 ${n} 个`);
+      go.title = n === 0 ? "开一个新终端标签页, 把 claude --resume 敲进去"
+               : (n === 1 ? "它已经开着 — 点这里切到那个窗口, 不会重复打开"
+                          : "同一个对话开在多个窗口里, 先关到只剩一个");
     }
     const st = s ? s.state : "closed";
     row.classList.toggle("live", st === "running");
@@ -482,14 +524,65 @@ $("#list").addEventListener("click", async e => {
     row.classList.toggle("star", v);
   }
   else if(act === "resume"){
-    btn.textContent = "启动中…";
+    // 一个按钮三种结局, 由后端按"此刻开着几个窗口"决定: 0 个新开, 1 个切过去,
+    // 2 个以上拒绝并把它们列出来 —— 客户端不自己判断, 免得和轮询到的状态不一致。
+    btn._busy = true;
+    const had = (STATUS[id] && STATUS[id].wins || []).length;
+    btn.textContent = had ? "切换中…" : "启动中…";
     const r = await fetch("/api/resume", {method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({id, cwd: rec.cwd,
         terminal: $("#dockTab").checked ? "type" : "type-new"})});
     const d = await r.json();
-    btn.textContent = d.ok ? "已弹窗口" : "失败";
-    setTimeout(() => btn.textContent = "Resume", 2000);
+    if(d.conflict){
+      btn.textContent = "⚠ 开着多个";
+      $("#stat").innerHTML = `⚠ ${esc(d.why)} — 下面每个窗口后面都有「✕ 关闭」。`;
+    }else if(d.switched){
+      btn.textContent = d.ok ? "已切过去" : "切不过去";
+      if(!d.ok) $("#stat").textContent = "切不过去: " + (d.why || "系统拒绝了前台切换, 请点任务栏");
+    }else{
+      btn.textContent = d.ok ? "已弹窗口" : "失败";
+      if(!d.ok) $("#stat").textContent = "Resume 失败: " + (d.why || "未知原因");
+    }
+    setTimeout(() => { btn._busy = false; paintStatus(); }, 2000);
+  }
+  else if(act === "focus"){
+    const pid = +btn.dataset.pid;
+    const r = await fetch("/api/focus", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({id, pid})});
+    const d = await r.json();
+    if(!d.ok) $("#stat").textContent = "切不过去: " + (d.why || "系统拒绝了前台切换, 请点任务栏");
+  }
+  else if(act === "close"){
+    // 二次点击确认 —— 不用 confirm(), 模态框会卡住页面也挡住自动化
+    const box = row.querySelector(".stbox");
+    if(!btn.classList.contains("armed")){
+      btn.classList.add("armed");
+      btn.textContent = "确认关?";
+      if(box) box._armed = true;
+      clearTimeout(btn._t);
+      btn._t = setTimeout(() => {
+        btn.classList.remove("armed"); btn.textContent = "✕ 关闭";
+        if(box) box._armed = false;
+      }, 4000);
+      return;
+    }
+    clearTimeout(btn._t);
+    btn.textContent = "关闭中…";
+    const pid = +btn.dataset.pid;
+    const r = await fetch("/api/close", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({id, pid})});
+    const d = await r.json();
+    if(box) box._armed = false;
+    if(d.ok){
+      $("#stat").textContent = d.already ? "它本来就已经关了。"
+        : `已关闭 pid ${pid}` + (d.children ? ` (连同 ${d.children} 个子进程)` : "")
+          + (d.terminal_closed ? ", 终端窗口也一并关掉" : "")
+          + (d.note ? " — " + d.note : "");
+    }else{
+      $("#stat").textContent = "关不掉: " + (d.why || "未知原因");
+    }
+    pollStatus();
   }
   else if(act === "topics"){
     btn.classList.toggle("open");

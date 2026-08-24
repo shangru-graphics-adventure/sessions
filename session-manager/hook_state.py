@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Claude 对话实时状态 hook — 由 settings.json 的三个 hook 调用。
 
+    python hook_state.py SessionStart       < payload.json
     python hook_state.py UserPromptSubmit   < payload.json
     python hook_state.py Stop               < payload.json
     python hook_state.py Notification       < payload.json
@@ -18,6 +19,9 @@ import os
 import sys
 import json
 import time
+
+import utf8_console
+utf8_console.enable()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_DIR = os.path.join(HERE, "state")
@@ -126,6 +130,42 @@ def capture_window(term_pid):
     return out
 
 
+def merge_proc(rec, info):
+    """把这一回合观察到的「进程 + 它的终端窗口」并进 rec["procs"]。
+
+    为什么要一个数组而不是一组顶层字段: **同一个对话可以同时被 resume 到好几个
+    窗口里** —— 它们共用一个 session_id, 于是写的是同一个 state 文件。只留一个
+    pid 的话, 后开的那个会把先开的顶掉, 页面上就永远只看得见最后活动的那个,
+    另外几个既切不过去也关不掉(而它们恰恰是要提醒你去关掉的那些)。
+
+    同一个 pid 再次出现只更新(窗口标题会跟着对话内容变), 不追加。
+    顶层的 pid/hwnd 仍然保留 = **最近活动的那个**, 老的 state 文件与既有 UI 因此
+    不用改也能继续工作。
+    """
+    pid = info.get("pid")
+    if not pid:
+        return
+    procs = rec.get("procs")
+    if not isinstance(procs, list):
+        # 从旧格式(只有顶层 pid)升上来: 先把那一个塞进数组, 不丢历史
+        procs = []
+        if rec.get("pid"):
+            procs.append({k: rec.get(k) for k in
+                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+    now = time.time()
+    for e in procs:
+        if e.get("pid") == pid:
+            e.update({k: v for k, v in info.items() if v})
+            e["ts"] = now
+            break
+    else:
+        e = dict(info)
+        e["ts"] = e["first_seen"] = now
+        procs.append(e)
+    # 只留最近 8 个, 死掉的那些由 server 端按进程存活过滤, 这里不做进程查询
+    rec["procs"] = procs[-8:]
+
+
 def last_assistant_text(transcript_path, tail_bytes=300_000):
     """取我这一回合最后说的那段话的开头 —— 通常就是结论。"""
     if not transcript_path or not os.path.exists(transcript_path):
@@ -218,6 +258,18 @@ def main():
         rec["note"] = ""
         rec.update(find_owner())
         rec.update(capture_window(rec.get("term_pid")))
+        merge_proc(rec, {k: rec.get(k) for k in
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+    elif event == "SessionStart":
+        # 会话刚起来(启动 / --resume / /clear) —— 这是"又多开了一个窗口"的唯一
+        # 早期信号: 用户还没说话, 别的事件都不会触发。没有它, 一个刚 resume 出来
+        # 的窗口要等到第一次提交才被记上, 而"别重复 resume"的提醒恰恰要在那之前给。
+        rec.setdefault("state", "done")
+        rec["source"] = clean(data.get("source") or "", 20)
+        rec.update(find_owner())
+        rec.update(capture_window(rec.get("term_pid")))
+        merge_proc(rec, {k: rec.get(k) for k in
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
     elif event == "Stop":
         rec["state"] = "done"
         rec["note"] = ""
@@ -230,12 +282,16 @@ def main():
             rec["win_title"] = w["win_title"]
         if w.get("hwnd"):
             rec["hwnd"] = w["hwnd"]
+        merge_proc(rec, {k: rec.get(k) for k in
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
     elif event == "Notification":
         # Claude 需要你的注意: 权限确认、选择、长时间空闲
         rec["state"] = "waiting"
         rec["note"] = clean(data.get("message") or "")
         if not rec.get("pid"):
             rec.update(find_owner())
+        merge_proc(rec, {k: rec.get(k) for k in
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
     elif event == "SessionEnd":
         rec["state"] = "closed"
         rec["reason"] = clean(data.get("reason") or "", 40)

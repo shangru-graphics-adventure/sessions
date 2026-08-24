@@ -19,6 +19,9 @@ import subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import actions
 
+import utf8_console
+utf8_console.enable()
+
 u32 = ctypes.windll.user32
 MARK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_inject_probe.txt")
 FAILED = []

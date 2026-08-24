@@ -9,10 +9,15 @@
 ⚠ 每次调用都会触发 user-level 的 Stop hook(响铃 + 归档 + state 文件), 详见 README。
 单条约 18-25 秒, 全在 CLI 冷启动上。
 """
-import os, io, json, time, subprocess, threading
+import os, io, json, sys, time, subprocess, threading
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config
+import utf8_console
+utf8_console.enable()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROJ = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+PROJ = config.PROJECTS_DIR
 TITLES = os.path.join(HERE, "titles.jsonl")
 
 import sys

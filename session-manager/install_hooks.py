@@ -15,11 +15,17 @@ import shutil
 
 import config
 
+import utf8_console
+utf8_console.enable()
+
 SETTINGS = config.SETTINGS_PATH
 HOOK_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_state.py")
 MARK = "hook_state.py"          # 认领标记: 命令里含这个字符串的就是本工具装的
 
-EVENTS = ["UserPromptSubmit", "Stop", "Notification", "SessionEnd"]
+# SessionStart 是"这个对话又被开到一个新窗口里了"的最早信号(resume / 新开 / clear),
+# 没有它, 刚 resume 出来还没说话的窗口不会被记上, 而"你已经开着一个了"的提醒
+# 恰恰要在你重复 resume 之前给出来。
+EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd"]
 
 
 def entry(event):

@@ -16,6 +16,9 @@ import subprocess
 
 import config
 
+import utf8_console
+utf8_console.enable()
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.expanduser("~")
 HOOK = os.path.join(HERE, "hook_state.py")

@@ -11,6 +11,9 @@ import ctypes.wintypes as wt
 
 import psutil
 
+import utf8_console
+utf8_console.enable()
+
 TARGET = "claude.exe"
 
 

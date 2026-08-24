@@ -19,6 +19,9 @@ import ctypes.wintypes as wt
 
 import psutil
 
+import utf8_console
+utf8_console.enable()
+
 u32 = ctypes.windll.user32
 k32 = ctypes.windll.kernel32
 
