@@ -379,6 +379,65 @@ def _vk_input(vk, up=False):
                                     time=0, dwExtraInfo=None))
 
 
+VK_CONTROL = 0x11
+VK_TAB = 0x09
+
+
+def _title_core(t):
+    """标签标题去掉状态符号后的核心文本。
+
+    Claude Code 往终端标题里写"◐ 看盘工具重构"这种, 前面那个符号(✳/◐/◑/●)随
+    对话状态变, 只有后面的文字是稳定的 —— 匹配时只认文字部分。
+    """
+    t = (t or "").strip()
+    while t and not (t[0].isalnum() or ord(t[0]) > 0x2E80):   # 丢掉前导符号(保留 CJK)
+        t = t[1:].strip()
+    return t
+
+
+def focus_wt_tab(hwnd, want_title, max_tabs=16):
+    """把一个 Windows Terminal 窗口切到前台, 并轮到标题匹配的那个标签。
+
+    WT 是单窗口多标签, 所有标签共用一个 HWND —— 光提前台, 活动的还是原来那个标签。
+    但**窗口标题跟着活动标签走**, 而每个对话的标签标题(Claude Code 自己写的摘要)
+    我们都记着。于是: 提前台 -> 标题不对就发一个 Ctrl+Tab -> 再看标题, 至多轮
+    max_tabs 圈。发键盘前必须确认前台就是目标窗口(与 type_into_window 同一条铁律),
+    焦点被抢走就立刻停手 —— 绝不对着别的窗口发按键。
+
+    WT 没有任何 CLI/API 能按标题聚焦标签(wt focus-tab 只认 index, 而 index 与对话
+    没有映射), 这条键盘路是唯一不猜索引的做法。
+    """
+    want = _title_core(want_title)
+    r = focus_window(hwnd)
+    if not r.get("ok"):
+        return r
+    if not want:
+        return dict(r, tab=False, why="没记到这个对话的标签标题, 只能到窗口")
+    u32 = _u32()
+
+    def cur():
+        return _title_core(window_title(hwnd))
+
+    if want in cur() or cur() in want:
+        return dict(r, tab=True, title=window_title(hwnd))
+    # 不能用"标题重复出现"当作转满一圈的判据 —— 窗口里可以有两个标签顶着同样的
+    # 标题(同一对话开两份就会), 那样第二个同名标签会被误判成"回到起点"而提前放弃
+    # (实测踩到: 两对重名标签的窗口里, 找一个明明存在的独名标签也会失败)。
+    # 老老实实轮满 max_tabs 次, 一次 0.18s, 上限也就 3 秒。
+    for _ in range(max_tabs):
+        if u32.GetForegroundWindow() != hwnd:
+            return dict(r, tab=False,
+                        why="轮标签途中焦点被抢走, 已停手(切到了窗口, 标签请自己点)")
+        _send([_vk_input(VK_CONTROL), _vk_input(VK_TAB),
+               _vk_input(VK_TAB, up=True), _vk_input(VK_CONTROL, up=True)])
+        time.sleep(0.18)                  # WT 切标签 + 刷新标题要一拍
+        t = cur()
+        if want in t or (t and t in want):
+            return dict(r, tab=True, title=window_title(hwnd))
+    return dict(r, tab=False,
+                why="轮了 %d 次没遇到标题含「%s」的标签, 标签请自己点" % (max_tabs, want[:20]))
+
+
 def type_into_window(hwnd, text, press_enter=True, settle=0.35):
     """切到那个窗口, 把 text 敲进去。
 
