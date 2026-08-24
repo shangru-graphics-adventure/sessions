@@ -51,6 +51,13 @@ xcopy /E /I vscode-bridge "%USERPROFILE%\.vscode\extensions\local.claude-session
 | `GET /terminals` | `[{pid, name, active}]` |
 | `POST /show {pid, preserveFocus?}` | 显示这个终端 |
 | `POST /close {pid}` | 关掉这个标签页 |
+| `POST /new {cwd, cmd, name}` | **在这个窗口里新开一个终端并把命令敲进去** |
+
+`/new` 走 `createTerminal` + `sendText`, 比"往窗口发键盘事件"可靠得多: 不抢焦点、不会敲错
+窗口、不用等提示符画完。**它只允许起 `claude`**(正则卡死) —— `sendText` 等于在你的 shell
+里执行任意命令, 而一个只能干一件事的接口, 出问题时排查成本低得多。
+(本机别的程序本来就能直接执行命令, 所以这个接口不扩大攻击面; 真正拦住浏览器的是
+下面那条 Origin 规则。)
 
 `/close` 用 `Terminal.dispose()` —— 这是 VS Code 自己的关法, 标签干干净净地消失。
 (管理器的兜底做法是杀掉那个 shell, 效果一样, 但退出码非零, VS Code 会多弹一条

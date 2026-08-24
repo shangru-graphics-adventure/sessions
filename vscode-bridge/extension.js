@@ -93,6 +93,38 @@ async function handle(req, res) {
   if (url === "/terminals") {
     return json(res, 200, { ok: true, terminals: await terminalList() });
   }
+  if (url === "/new") {
+    // 在这个 VS Code 窗口里新开一个终端标签, 并把命令敲进去。
+    //
+    // 比"往窗口发键盘事件"可靠得多: createTerminal + sendText 是官方 API, 不抢焦点、
+    // 不会敲错窗口、不用等提示符画完。
+    //
+    // **只允许起 claude。** sendText 等于在你的 shell 里执行任意命令, 所以这里卡死
+    // 一个白名单 —— 本机别的程序本来就能直接执行命令(这个接口不扩大攻击面), 但一个
+    // 只能干一件事的接口, 出问题时的排查成本低得多。
+    const body = await readBody(req);
+    const cmd = String(body.cmd || "");
+    if (!/^claude(\s|$)/.test(cmd)) {
+      return json(res, 400, { ok: false, why: "这个接口只用来起 claude" });
+    }
+    let opts = { name: String(body.name || "claude") };
+    if (body.cwd) opts.cwd = String(body.cwd);
+    let t;
+    try {
+      t = vscode.window.createTerminal(opts);
+    } catch (e) {
+      return json(res, 200, { ok: false, why: "建不出终端: " + String(e) });
+    }
+    t.show();
+    t.sendText(cmd, true);
+    let pid = null;
+    try {
+      pid = await t.processId;
+    } catch (e) {
+      pid = null;
+    }
+    return json(res, 200, { ok: true, pid: pid, name: t.name });
+  }
   if (url === "/show" || url === "/close") {
     const body = await readBody(req);
     const pid = Number(body.pid);

@@ -278,7 +278,7 @@ jsonl。这不是"多开了几个终端"那么无害: 两边的记录会互相�
 
 | 开着几个 | 按钮显示 | 点下去 |
 |---|---|---|
-| 0 | `Resume` | 照旧: 开新标签页, 把 `claude --resume` 敲进去 |
+| 0 | `Resume` | 新开一个: 顶部勾着「在 VS Code 里打开」就走桥, 否则开 Windows Terminal |
 | 1 | `⇥ 切过去` | 切到那个窗口(不新开)。切不过去时如实说"系统拒绝了前台切换, 请点任务栏" |
 | ≥2 | `⚠ 开着 N 个` | 拒绝, 并在状态条下面把它们一个个列出来 |
 
@@ -341,7 +341,7 @@ claude.exe -> powershell.exe -> Code.exe(渲染进程, 无窗口) -> Code.exe(�
 | `✕ 关闭` 顺手关窗 | **不会做** | 见下 |
 | `⇥ 切过去` | 默认切到 IDE 窗口; **装了 [`vscode-bridge/`](../vscode-bridge/) 就能点到具体标签页** | 标签没有 HWND, 只有扩展 API 够得着 |
 | 关掉标签页本身 | **`✕ 连标签页` 按钮** | 走扩展的 `dispose()`, 没装则杀掉标签自己的 shell |
-| `Resume` 新开 | 开的是 **Windows Terminal**, 不是 VS Code 终端 | 没有干净的 CLI 能"在 VS Code 里新开终端并把命令敲进去" |
+| `Resume` 新开 | **默认就开在 VS Code 里**(装了桥的话), 顶部可切回终端 | 走扩展的 `createTerminal` + `sendText` |
 
 hook 认的终端(那个渲染进程)**自己没有窗口**, 所以 `capture_window` 找不到句柄时会
 **沿父链再往上找最多 4 层**, 于是拿到 IDE 主窗口; `win_owner` 字段记下这个句柄实际属于谁,
@@ -395,6 +395,8 @@ hook:    shell pid=45848 powershell.exe  (claude 的父进程)
 - `⇥ 切过去` 直接把**那个终端标签页**显示出来(`Terminal.show()`), 再自己把 IDE 窗口提到前台
   —— **两步都要做**: `Terminal.show()` 只在 VS Code 内部切标签, 不会把 OS 窗口拉到前面,
   那一步得靠 `SetForegroundWindow`。少了它, 标签是切了, 但你还盯着原来那个窗口, 看起来像没反应。
+- `Resume` 直接在 VS Code 里新开一个终端标签并把 `claude --resume` 敲进去
+  (`createTerminal` + `sendText`, 官方 API, 不抢焦点也不会敲错窗口)
 - `✕ 连标签页` 改走 `Terminal.dispose()` —— VS Code 自己的关法, 标签干干净净消失,
   不会留下"terminal process terminated with exit code"那条提示(杀 shell 的兜底做法会)
 
@@ -415,6 +417,13 @@ server 会当场查一次 claude 的父进程 / 沿父链找窗口。没有这�
 `terminal.integrated.enablePersistentSessions`: **重载窗口**时 VS Code 会重连原来的进程
 (pid 不变, 我们的追踪继续有效); **重启 VS Code** 时它会用原环境**重新启动** shell ——
 那是个新 pid, 而且 claude 不会被重新拉起, 所以本工具会如实显示"已关闭"。
+
+### 在哪儿打开: 顶部那个勾
+
+「在 VS Code 里打开」**默认勾上**。VS Code 那边用不了(没装扩展 / VS Code 没开 / 端口段被占满)
+时**自动退回终端**, 并在状态行如实说明退回的原因 —— 不会假装成功, 也不会因此失败。
+不勾就走原来那条路(Windows Terminal), 那时旁边的「并入当前终端窗口」才有意义, 所以勾着
+VS Code 时它会被灰掉。
 
 ## Resume 前自动信任目录
 

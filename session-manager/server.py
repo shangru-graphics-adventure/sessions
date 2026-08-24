@@ -1013,6 +1013,20 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
     # `claude --resume` 会卡在那儿等你按 y。(切到已有窗口那条路不需要, 它早就信任过了。)
     trusted = actions.trust_folder(cwd) if config.AUTO_TRUST else None
 
+    if terminal.startswith("vscode"):
+        # 在 VS Code 里开一个新终端标签并把命令敲进去 —— 走扩展的 createTerminal +
+        # sendText, 不抢焦点也不会敲错窗口。桥不在(没装扩展 / VS Code 没开)就自动
+        # 退回终端那条路, 并在返回里说清楚为什么。
+        via = actions.bridge("/new", {"cwd": cwd, "cmd": line, "name": title})
+        if via and via.get("ok"):
+            return {"ok": True, "cwd": cwd, "terminal": "vscode", "trusted": trusted,
+                    "shell_pid": via.get("pid"), "tab": via.get("name"),
+                    "cmd": "cd /d %s && %s" % (cwd, line)}
+        fell_back = (via or {}).get("why") or "没找到 VS Code 桥(扩展没装? VS Code 没开?)"
+        terminal = "type"                     # 退回原来的做法
+    else:
+        fell_back = None
+
     if terminal in ("type", "type-new") and WT_EXE:
         args = [WT_EXE, "-w", "0" if terminal == "type" else "new",
                 "new-tab", "--title", title]
@@ -1030,7 +1044,7 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
             return {"ok": False, "why": r.get("why"), "terminal": "wt/type",
                     "cmd": "cd /d %s && %s" % (cwd, line)}
         return {"ok": True, "cwd": cwd, "terminal": "wt/type", "trusted": trusted,
-                "cmd": "cd /d %s && %s" % (cwd, line)}
+                "fell_back": fell_back, "cmd": "cd /d %s && %s" % (cwd, line)}
 
     if terminal != "conhost" and WT_EXE:
         args = [WT_EXE, "-w", "0" if terminal == "dock" else "new", "new-tab",
@@ -1047,7 +1061,7 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
         used = "conhost"
 
     return {"ok": True, "cwd": cwd, "terminal": used, "trusted": trusted,
-            "cmd": "cd /d %s && %s" % (cwd, line)}
+            "fell_back": fell_back, "cmd": "cd /d %s && %s" % (cwd, line)}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -1154,7 +1168,11 @@ class Handler(BaseHTTPRequestHandler):
             if not sid:
                 return self._send(400, {"error": "no id"})
             try:
-                sys.path.insert(0, os.path.join(HERE, "titler"))
+                # 并发点好几个 ↻ 时这里会被同时进来好几次 —— 每次都 insert 会让
+                # sys.path 越长越离谱。gen 本身是线程安全的(titles.jsonl 有写锁)。
+                _tp = os.path.join(HERE, "titler")
+                if _tp not in sys.path:
+                    sys.path.insert(0, _tp)
                 import gen
                 r = gen.retitle(sid)
             except Exception as e:
