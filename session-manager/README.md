@@ -433,7 +433,9 @@ hook:    shell pid=45848 powershell.exe  (claude 的父进程)
   —— **两步都要做**: `Terminal.show()` 只在 VS Code 内部切标签, 不会把 OS 窗口拉到前面,
   那一步得靠 `SetForegroundWindow`。少了它, 标签是切了, 但你还盯着原来那个窗口, 看起来像没反应。
 - `Resume` 直接在 VS Code 里新开一个终端标签并把 `claude --resume` 敲进去
-  (`createTerminal` + `sendText`, 官方 API, 不抢焦点也不会敲错窗口)
+  (`createTerminal` + `sendText`, 官方 API, 不会敲错窗口), 然后**把 IDE 窗口提到前台**
+  —— `show()` 只在 VS Code 内部把新终端设为活动标签, IDE 本身还留在你身后,
+  提前台永远是我们自己的事(从新终端的 shell pid 沿父链找到主窗口再 SetForegroundWindow)
 - `✕ 连标签页` 改走 `Terminal.dispose()` —— VS Code 自己的关法, 标签干干净净消失,
   不会留下"terminal process terminated with exit code"那条提示(杀 shell 的兜底做法会)
 
