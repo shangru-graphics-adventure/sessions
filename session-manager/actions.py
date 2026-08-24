@@ -149,8 +149,14 @@ def close_window(hwnd):
         return False
 
 
+# 一个终端标签页里的 shell。杀掉它, VS Code 会把那个标签页收掉(实测 2026-08-24:
+# 标签页确实消失了)。只认这几个名字 —— 父进程不是已知 shell 就绝不动它。
+SHELLS = ("powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "zsh.exe", "sh.exe",
+          "git-bash.exe", "nu.exe", "fish.exe")
+
+
 def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
-                 term_name=None, timeout=5.0):
+                 term_name=None, kill_shell=False, timeout=5.0):
     """结束一个对话进程(以及它派生的子进程)。
 
     **动手前先验明正身**, 这是硬约束不是可选项: 进程名必须是 claude.exe, 创建时间
@@ -161,6 +167,12 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
     继续占着端口和文件。这与直接关掉终端窗口的效果一致(那时 conhost 也是杀整棵树)。
     **只杀这一棵 pid 树** —— 绝不按窗口标题去 taskkill, 那个过滤器在 Win10+ 上会
     静默失效并杀光同名进程(README 里记着这笔学费)。
+
+    kill_shell=True 时**连这个对话所在的 shell 一起收掉**。用途只有一个: VS Code 的
+    集成终端没有窗口句柄可关(标签页共用 IDE 主窗口), 但杀掉那个标签自己的 shell,
+    VS Code 就会把标签页收走 —— 实测确认标签页会消失。一个标签一个 shell, 所以
+    语义是干净的。前提照旧要验: 父进程必须是**已知的 shell 名**(SHELLS), 不是就
+    只杀 claude 并在返回里说明, 绝不对着一个认不出来的父进程开枪。
 
     close_terminal=True 时, 进程收干净后再给终端窗口发一个 WM_CLOSE。两道闸都要过:
       1. 调用方先确认这个终端窗口里没有别的对话(Windows Terminal 是单窗口多标签,
@@ -185,17 +197,28 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
         if ctime is not None and abs(p.create_time() - float(ctime)) >= 2.0:
             return {"ok": False, "why": "pid %s 的创建时间对不上(它已经被系统回收给别的进程了)" % pid}
         kids = p.children(recursive=True)
+        shell = None
+        shell_why = ""
+        if kill_shell:
+            par = p.parent()
+            pname = (par.name() or "").lower() if par else ""
+            if par and pname in SHELLS:
+                shell = par
+            else:
+                shell_why = ("父进程是 %s, 不在已知 shell 名单里 —— 只关对话, 不动它"
+                             % (pname or "?"))
     except psutil.NoSuchProcess:
         return {"ok": True, "already": True, "why": "进程本来就已经不在了"}
     except Exception as e:
         return {"ok": False, "why": str(e)}
 
-    for proc in kids + [p]:
+    targets = kids + [p] + ([shell] if shell else [])
+    for proc in targets:
         try:
             proc.terminate()
         except Exception:
             pass
-    gone, alive = psutil.wait_procs(kids + [p], timeout=timeout)
+    gone, alive = psutil.wait_procs(targets, timeout=timeout)
     for proc in alive:                      # 赖着不走的再来一次硬的
         try:
             proc.kill()
@@ -205,6 +228,10 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
         psutil.wait_procs(alive, timeout=2.0)
 
     out = {"ok": True, "killed": len(gone) + len(alive), "children": len(kids)}
+    if kill_shell:
+        out["shell_killed"] = bool(shell)
+        if shell_why:
+            out["shell_why"] = shell_why
     if close_terminal and hwnd:
         host = (term_name or "").lower()
         if host and host not in config.CLOSABLE_TERMS:

@@ -358,14 +358,44 @@ VS Code 里就会给**编辑器主窗口**发 WM_CLOSE —— 关掉你整个 ID
 
 页面上每个窗口都标着宿主进程名(`Code.exe · pid 31728`), 一眼能看出这个对话跑在哪。
 
-### 想连标签页一起关掉的话
+### `✕ 连标签页` —— VS Code 里怎么把标签页也收掉
 
 实测: **只杀 claude, 标签页会留下一个 PowerShell 提示符**(和 Windows Terminal 里留下 cmd
-提示符是一回事)。要让标签页本身消失, 得杀掉**那个标签的 shell**(claude 的父进程) ——
-一个标签一个 shell, 所以这么做的语义是干净的。
+提示符是一回事)。**杀掉那个标签自己的 shell, VS Code 就会把标签页收走**(实测确认标签页
+消失了)。一个标签一个 shell, 所以语义是干净的。
 
-本工具**没有**这么做, 因为杀别人的 shell 比杀自己起的 claude 风险高一档。需要的话
-config 里加一条开关很容易(`close_claude` 收下父 shell 的 pid 即可)。
+所以 VS Code 宿主的窗口会多出一个 `✕ 连标签页` 按钮(纯终端宿主没有这个按钮 —— 它们
+直接关窗口就行)。安全前提照旧要验: **父进程必须是已知的 shell 名**(`actions.SHELLS`),
+不是就只关对话并在返回里说明, 绝不对着一个认不出来的父进程开枪。两条都有回归测试。
+
+顺带一个官方文档里的边界(**[外部先验]**, 未实测):
+`terminal.integrated.showExitAlert` 控制"进程以非零退出码结束"时那条提示要不要弹 ——
+我们是 terminate 掉 shell 的, 退出码非零, 所以你可能会看到那条通知。它只是通知,
+不影响标签页被收掉。
+
+### 为什么切不到具体那个标签页
+
+不是没找到办法, 是**官方就没提供**: VS Code 文档里没有任何 CLI 参数或 URI handler 能
+聚焦某个终端(见 Terminal 文档与 CLI 文档)。Windows 这一层也给不了 —— 标签不是窗口,
+没有自己的 HWND。
+
+真要做到, 唯一干净的路是**写一个巴掌大的 VS Code 扩展**。扩展 API 三件套是齐的:
+
+| API | 作用 |
+|---|---|
+| `window.terminals` | 枚举当前打开的终端 |
+| `Terminal.processId` | 该终端 shell 进程的 OS pid |
+| `Terminal.show(preserveFocus?)` | 把这个终端显示出来 |
+
+而 `Terminal.processId` **正好就是我们已经掌握的那个 pid**(claude 的父 shell) —— 扩展只要
+监听一个本地端口, 收到 pid 就 `terminals.find(t => t.processId === pid).show()`, 闭环就成了。
+本仓库暂时没有做这个扩展。
+
+### 另一个官方行为要知道(**[外部先验]**, 未实测)
+
+`terminal.integrated.enablePersistentSessions`: **重载窗口**时 VS Code 会重连原来的进程
+(pid 不变, 我们的追踪继续有效); **重启 VS Code** 时它会用原环境**重新启动** shell ——
+那是个新 pid, 而且 claude 不会被重新拉起, 所以本工具会如实显示"已关闭"。
 
 ## Resume 前自动信任目录
 

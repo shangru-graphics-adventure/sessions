@@ -82,6 +82,35 @@ def spawn_fake_claude(tmp, n):
     return proc, round(psutil.Process(proc.pid).create_time(), 3), exe
 
 
+def spawn_shell_with_claude(tmp, n):
+    """造一条 powershell -> claude.exe 的两级链, 模拟 VS Code 的终端标签页。
+
+    VS Code 里每个终端标签有自己的 shell, claude 是它的子进程; "关掉标签页"实际上
+    就是杀掉那个 shell。这里必须真的搭出两级, 否则测不到 kill_shell 那条路。
+    """
+    d = os.path.join(tmp, "s%d" % n)
+    os.makedirs(d, exist_ok=True)
+    exe = os.path.join(d, "claude.exe")
+    shutil.copyfile(sys.executable, exe)
+    sh = subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-Command",
+         "& '%s' -c 'import time; time.sleep(300)'" % exe],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    import psutil
+    deadline = time.time() + 15
+    while time.time() < deadline:                  # 等 claude 子进程真的起来
+        try:
+            kids = [c for c in psutil.Process(sh.pid).children()
+                    if c.name().lower() == "claude.exe"]
+            if kids:
+                return sh, kids[0].pid, round(kids[0].create_time(), 3)
+        except Exception:
+            pass
+        time.sleep(0.3)
+    raise RuntimeError("假 shell 里的 claude 没起来")
+
+
 def cleanup(procs, tmp):
     for pr in procs:
         try:
@@ -194,6 +223,19 @@ def main():
         r = actions.close_claude(p4.pid, ct4, hwnd=hwnd, close_terminal=True,
                                  term_name="explorer.exe")
         check("资源管理器同样不许关", r.get("terminal_closed") is False, str(r.get("term_kept"))[:60])
+
+        print("5c) 连标签页一起关: 父进程是 shell 才动它")
+        import psutil
+        sh1, cpid1, cct1 = spawn_shell_with_claude(tmp, 1); spawned.append(sh1)
+        r = actions.close_claude(cpid1, cct1, kill_shell=True)
+        check("claude 没了", r.get("ok") is True and not psutil.pid_exists(cpid1))
+        check("它的 shell 也一起收掉了", r.get("shell_killed") is True
+              and not psutil.pid_exists(sh1.pid), str(r)[:90])
+
+        p5, ct5, _ = spawn_fake_claude(tmp, 5); spawned.append(p5)
+        r = actions.close_claude(p5.pid, ct5, kill_shell=True)
+        check("父不是已知 shell 时只关对话", r.get("shell_killed") is False, str(r)[:60])
+        check("并说明了原因", "shell" in (r.get("shell_why") or ""), str(r.get("shell_why"))[:70])
 
         print("6) 自动 trust: 只翻一个布尔, 别的一个字节都不许动")
         import actions
