@@ -106,6 +106,7 @@ def main():
     p1, ct1, exe1 = spawn_fake_claude(tmp, 1)
     p2, ct2, _ = spawn_fake_claude(tmp, 2)
     print("假 claude 进程: %d, %d  (%s)" % (p1.pid, p2.pid, exe1))
+    spawned = [p1, p2]                     # 后面还会起几个, 统一在 finally 里收
 
     try:
         print("1) 一个窗口 -> wins 有一条, resume 应该是「切过去」而不是新开")
@@ -177,6 +178,23 @@ def main():
         r = post("/api/resume", {"id": SID_A, "cwd": HOME, "dry_run": True})
         check("resume 回到新开窗口(dry-run 不真开)", r.get("dry") is True and not r.get("switched"),
               str(r)[:100])
+        print("5b) VS Code / 资源管理器当宿主时, 绝不关窗(只结束对话进程)")
+        import actions
+        p3, ct3, _ = spawn_fake_claude(tmp, 3); spawned.append(p3)
+        # 拿一个真实存在的窗口句柄来当"宿主窗口" —— 用本机任意一个可见窗口即可,
+        # 只要 close_claude 判定"不能关"就不会去动它。
+        import ctypes
+        hwnd = ctypes.windll.user32.GetDesktopWindow()
+        r = actions.close_claude(p3.pid, ct3, hwnd=hwnd, close_terminal=True,
+                                 term_name="Code.exe")
+        check("进程还是关掉了", r.get("ok") is True and p3.poll() is not None)
+        check("但窗口没关", r.get("terminal_closed") is False, str(r.get("term_kept"))[:60])
+        check("给出了原因", "Code.exe" in (r.get("term_kept") or ""))
+        p4, ct4, _ = spawn_fake_claude(tmp, 4); spawned.append(p4)
+        r = actions.close_claude(p4.pid, ct4, hwnd=hwnd, close_terminal=True,
+                                 term_name="explorer.exe")
+        check("资源管理器同样不许关", r.get("terminal_closed") is False, str(r.get("term_kept"))[:60])
+
         print("6) 自动 trust: 只翻一个布尔, 别的一个字节都不许动")
         import actions
         fake = os.path.join(tmp, ".claude.json")
@@ -203,7 +221,7 @@ def main():
         check("坏 json 不炸也不覆盖", actions.trust_folder(newdir, fake) is False
               and io.open(fake, encoding="utf-8").read().startswith("{ 这不是"))
     finally:
-        cleanup([p1, p2], tmp)
+        cleanup(spawned, tmp)
 
     print("")
     print("FAILED: %s" % (FAILED or "无, 全部通过"))

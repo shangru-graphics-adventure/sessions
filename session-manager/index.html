@@ -376,13 +376,25 @@ function winsHtml(s){
   // 两个窗口 resume 同一个对话, 写的是同一份 jsonl, 会互相覆盖。
   const w = (s && s.wins) || [];
   if(!w.length) return "";
-  const one = x => `<span class="win">`
-    + `<span class="wt">${esc(x.title || x.term || "终端窗口")}</span>`
-    + `<span class="wp">pid ${x.pid}</span>`
-    + `<button data-act="focus" data-pid="${x.pid}" title="把这个窗口切到前台">⇥ 切过去</button>`
-    + `<button class="danger" data-act="close" data-pid="${x.pid}"
-               title="结束这个对话的进程(连同它派生的子进程); 该终端窗口里没有别的对话时, 窗口也一并关掉">✕ 关闭</button>`
+  // 纯终端宿主关掉窗口是安全的; VS Code / 资源管理器这种"窗口里还装着别的东西"的
+  // 一律只结束对话进程, 窗口留着(后端也有同一道白名单, 这里只是把话说在前面)
+  const PURE_TERM = ["windowsterminal.exe","conhost.exe","openconsole.exe",
+                     "cmd.exe","powershell.exe","pwsh.exe"];
+  const one = x => {
+    const host = (x.term || "").toLowerCase();
+    const pure = !host || PURE_TERM.includes(host);
+    const ide = host === "code.exe";
+    return `<span class="win">`
+    + `<span class="wt">${esc(x.title || "终端窗口")}</span>`
+    + `<span class="wp">${esc(x.term || "")}${x.term ? " · " : ""}pid ${x.pid}</span>`
+    + `<button data-act="focus" data-pid="${x.pid}" title="${ide
+        ? "切到那个 VS Code 窗口 — 但切不到具体是哪个终端标签页, 得你自己点"
+        : "把这个窗口切到前台"}">⇥ 切过去</button>`
+    + `<button class="danger" data-act="close" data-pid="${x.pid}" title="${pure
+        ? "结束这个对话的进程(连同它派生的子进程); 该终端窗口里没有别的对话时, 窗口也一并关掉"
+        : "只结束这个对话的进程 — 宿主是 " + esc(x.term) + ", 窗口不会关(那里面还装着别的东西)"}">✕ 关闭</button>`
     + `</span>`;
+  };
   if(w.length === 1) return `<div class="wins">${one(w[0])}</div>`;
   return `<div class="wins"><span class="warn">⚠ 同一个对话开在 ${w.length} 个窗口里 —
     它们写同一份记录会互相覆盖, 请关到只剩一个:</span>${w.map(one).join("")}</div>`;
