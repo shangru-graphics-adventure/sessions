@@ -930,10 +930,22 @@ def focus_win(w):
     的行为。
     """
     host = (w.get("owner") or w.get("term") or "").lower()
-    # 句柄统一在这里解析一次: hook 记过就用记的, 没记(老 state)或记的是 None 就现场
-    # 从活着的进程沿父链找。**桥那条路也要用它** —— Terminal.show() 只在 VS Code
-    # 内部切标签, 不会把 IDE 窗口提到前台, 那一步得我们自己做。
-    hwnd = w.get("hwnd") or actions.window_for_pid(w.get("pid"))
+    # 句柄统一在这里解析一次, 而且**记过的也要验真**: 旧版 hook 会把 ConPTY 的
+    # PseudoConsoleWindow(0x0 伪窗口)当窗口记下来, 对它 SetForegroundWindow 的效果
+    # 落在宿主 WT 上 —— 也就是随便哪个当前活动的标签(实测: 点 A 的切过去, 前台变成
+    # 无关的 B)。验不过就从活着的 claude 进程沿父链重找真窗口。
+    hwnd = w.get("hwnd")
+    if not actions.is_real_window(hwnd):
+        hwnd = actions.window_for_pid(w.get("pid"))
+    # 分流按**真窗口的实际主人**来, 不信记账里的 term —— 旧账把 WT 标签里的对话记成
+    # "cmd.exe"(shell 挡在了宿主前面), 按那个字段走就会漏掉标签轮转。
+    if hwnd:
+        _, owner_name = actions.window_owner(hwnd)
+        owner_name = (owner_name or "").lower()
+        if owner_name == "windowsterminal.exe":
+            host = "windowsterminal.exe"
+        elif owner_name == "code.exe":
+            host = "code.exe"
 
     if host == "code.exe" and w.get("shell_pid"):
         via = actions.bridge("/show", {"pid": w["shell_pid"]})
@@ -952,7 +964,7 @@ def focus_win(w):
     if not hwnd:
         return {"ok": False, "win": w,
                 "why": "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]}
-    if (w.get("term") or "").lower() == "windowsterminal.exe":
+    if host == "windowsterminal.exe":
         # WT 单窗口多标签共用一个 HWND: 光提前台, 活动的还是原来那个标签(你若有
         # 六个对话开在同一个窗口里, 六个"切过去"会全落在同一个标签上)。所以提前台
         # 之后按记下的标签标题轮 Ctrl+Tab 找到它。

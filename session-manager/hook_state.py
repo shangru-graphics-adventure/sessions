@@ -55,8 +55,12 @@ def find_owner():
         import psutil
     except Exception:
         return out
-    TERMS = ("WindowsTerminal.exe", "conhost.exe", "cmd.exe", "powershell.exe",
-             "pwsh.exe", "Code.exe", "explorer.exe")
+    # 只认**真正拥有窗口的宿主**。cmd/powershell 是 shell, 不是宿主 —— 它们在
+    # Windows Terminal 里只有一个 ConPTY 伪窗口(类名 PseudoConsoleWindow, 0x0),
+    # 把它们当终端记下来, "切过去"就会对着伪窗口发力、落到随便哪个活动标签上
+    # (实测踩到)。shell 另有 shell_pid/shell_name 记账, 不走这里。
+    TERMS = ("WindowsTerminal.exe", "conhost.exe", "OpenConsole.exe",
+             "Code.exe", "explorer.exe")
     try:
         p = psutil.Process()
         seen_claude = False
@@ -76,7 +80,7 @@ def find_owner():
                 # (见 vscode-bridge/)。在 Windows Terminal 里它是那个标签的 cmd.exe。
                 out["shell_pid"] = p.pid
                 out["shell_name"] = name
-            if seen_claude and name in TERMS and name != "powershell.exe":
+            if seen_claude and name in TERMS:
                 out["term_pid"] = p.pid
                 out["term_name"] = name
                 break
@@ -131,8 +135,19 @@ def capture_window(term_pid):
         found = []
         EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
 
+        def _real(hwnd):
+            # ConPTY 伪窗口(PseudoConsoleWindow, 0x0)对 IsWindowVisible 返回 True,
+            # 必须按类名+矩形排掉, 否则记下的"窗口"根本切不过去
+            cls = ctypes.create_unicode_buffer(64)
+            u32.GetClassNameW(hwnd, cls, 64)
+            if cls.value == "PseudoConsoleWindow":
+                return False
+            r = wt.RECT()
+            u32.GetWindowRect(hwnd, ctypes.byref(r))
+            return (r.right - r.left) > 0 and (r.bottom - r.top) > 0
+
         def cb(hwnd, _):
-            if pid_of(hwnd) == term_pid and u32.IsWindowVisible(hwnd):
+            if pid_of(hwnd) == term_pid and u32.IsWindowVisible(hwnd) and _real(hwnd):
                 found.append(hwnd)
             return True
 

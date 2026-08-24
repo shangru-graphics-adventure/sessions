@@ -169,6 +169,44 @@ def trust_folder(cwd, path=None):
         return False
 
 
+def is_real_window(hwnd):
+    """这个句柄是不是一个真的、用户看得见的窗口。
+
+    ConPTY 会给每个标签造一个类名 `PseudoConsoleWindow` 的 0x0 伪窗口, 而
+    `IsWindowVisible` 对它返回 True —— 拿它当窗口用, "切过去"会落到宿主
+    (Windows Terminal)身上, 也就是**随便哪个当前活动的标签**(实测踩到:
+    点 A 对话的切过去, 前台变成了完全无关的 B 对话)。类名 + 非零矩形双重验。
+    """
+    if not hwnd:
+        return False
+    try:
+        import ctypes.wintypes as wt
+        u32 = _u32()
+        if not u32.IsWindow(hwnd) or not u32.IsWindowVisible(hwnd):
+            return False
+        cls = ctypes.create_unicode_buffer(64)
+        u32.GetClassNameW(hwnd, cls, 64)
+        if cls.value == "PseudoConsoleWindow":
+            return False
+        r = wt.RECT()
+        u32.GetWindowRect(hwnd, ctypes.byref(r))
+        return (r.right - r.left) > 0 and (r.bottom - r.top) > 0
+    except Exception:
+        return False
+
+
+def window_owner(hwnd):
+    """这个窗口属于哪个进程(pid, 进程名)。认不出返回 (None, "")。"""
+    try:
+        import ctypes.wintypes as wt
+        import psutil
+        p = wt.DWORD()
+        _u32().GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+        return p.value, psutil.Process(p.value).name()
+    except Exception:
+        return None, ""
+
+
 def window_for_pid(pid, hops=6):
     """从任意一个进程出发, 沿父链找到第一个"有唯一可见窗口"的祖先, 返回它的 HWND。
 
@@ -190,7 +228,7 @@ def window_for_pid(pid, hops=6):
             def cb(h, _):
                 p = wt.DWORD()
                 u32.GetWindowThreadProcessId(h, ctypes.byref(p))
-                if p.value == target and u32.IsWindowVisible(h):
+                if p.value == target and is_real_window(h):
                     got.append(h)
                 return True
 
