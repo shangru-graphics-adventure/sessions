@@ -90,6 +90,13 @@ def capture_window(term_pid):
 
     只在前台窗口确实属于该终端进程时才认; 否则退而求其次: 该进程只有一个窗口就用它,
     有多个就老实记 None —— 宁可没有, 不能记错窗口(切错窗口比不切更烦人)。
+
+    **进程本身没有窗口时, 沿父链继续往上找**(最多 4 层)。VS Code 是这样的:
+    实测(2026-08-24)链条是 claude -> powershell -> Code.exe(渲染, **无窗口**)
+    -> Code.exe(主进程, 有窗口) -> explorer.exe, hook 认的终端是那个渲染进程,
+    直接找它的窗口只会得到 None, 于是"切过去"永远不可用。往上一层就能拿到 IDE
+    主窗口 —— 切得过去(虽然到不了具体是哪个终端标签页, 那是一个窗口多个标签)。
+    记下 `win_owner` 说明这个 HWND 实际属于谁, 页面据此说人话。
     """
     out = {"hwnd": None, "win_title": ""}
     if not term_pid or os.name != "nt":
@@ -125,6 +132,30 @@ def capture_window(term_pid):
         u32.EnumWindows(EnumProc(cb), 0)
         if len(found) == 1:
             return {"hwnd": int(found[0]), "win_title": title_of(found[0])}
+        if not found:
+            # 这个进程没有窗口(VS Code 的渲染进程就是) —— 往上找有窗口的祖先
+            try:
+                import psutil
+                p = psutil.Process(term_pid)
+                for _ in range(4):
+                    p = p.parent()
+                    if p is None:
+                        break
+                    up = []
+
+                    def cb2(hwnd, _, _pid=p.pid, _out=up):
+                        if pid_of(hwnd) == _pid and u32.IsWindowVisible(hwnd):
+                            _out.append(hwnd)
+                        return True
+
+                    u32.EnumWindows(EnumProc(cb2), 0)
+                    if len(up) == 1:
+                        return {"hwnd": int(up[0]), "win_title": title_of(up[0]),
+                                "win_owner": p.name()}
+                    if up:
+                        break            # 有好几个, 认不准就不认
+            except Exception:
+                pass
     except Exception as e:
         log("capture_window failed: %s" % e)
     return out
@@ -151,7 +182,7 @@ def merge_proc(rec, info):
         procs = []
         if rec.get("pid"):
             procs.append({k: rec.get(k) for k in
-                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
     now = time.time()
     for e in procs:
         if e.get("pid") == pid:
@@ -259,7 +290,7 @@ def main():
         rec.update(find_owner())
         rec.update(capture_window(rec.get("term_pid")))
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
     elif event == "SessionStart":
         # 会话刚起来(启动 / --resume / /clear) —— 这是"又多开了一个窗口"的唯一
         # 早期信号: 用户还没说话, 别的事件都不会触发。没有它, 一个刚 resume 出来
@@ -269,7 +300,7 @@ def main():
         rec.update(find_owner())
         rec.update(capture_window(rec.get("term_pid")))
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
     elif event == "Stop":
         rec["state"] = "done"
         rec["note"] = ""
@@ -283,7 +314,7 @@ def main():
         if w.get("hwnd"):
             rec["hwnd"] = w["hwnd"]
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
     elif event == "Notification":
         # Claude 需要你的注意: 权限确认、选择、长时间空闲
         rec["state"] = "waiting"
@@ -291,7 +322,7 @@ def main():
         if not rec.get("pid"):
             rec.update(find_owner())
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
     elif event == "SessionEnd":
         rec["state"] = "closed"
         rec["reason"] = clean(data.get("reason") or "", 40)
