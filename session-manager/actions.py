@@ -94,6 +94,118 @@ def focus_window(hwnd):
         return {"ok": False, "why": str(e)}
 
 
+def trust_folder(cwd, path=None):
+    """把这个目录标记成"已信任", 免得 resume 出来第一屏是 trust 对话框。
+
+    实测(2026-08-24, 本机 ~/.claude.json)存的就是这个:
+
+        {"projects": {"C:/Users/me/work": {"hasTrustDialogAccepted": true, ...}}}
+
+    注意两件事, 都是实测出来的, 不是猜的:
+      · key 用**正斜杠**, 且没有结尾斜杠 —— 写成反斜杠的话 Claude Code 认不出来,
+        对话框照样弹;
+      · 这个文件是 Claude Code 自己在写的, 所以**只改这一个布尔字段, 原样回写其余
+        全部内容**, 并且原子替换(先写 .tmp 再 os.replace)。
+
+    只在你按下 Resume 的那一刻、针对**那一个目录**做。返回值是给调用方看的说明,
+    做不到就返回 False, 绝不因此让 resume 失败 —— 大不了自己点一下那个对话框。
+    """
+    path = path or os.path.join(HOME, ".claude.json")
+    if not cwd or not os.path.exists(path):
+        return False
+    key = os.path.abspath(cwd).replace("\\", "/").rstrip("/")
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        projects = cfg.setdefault("projects", {})
+        entry = projects.get(key)
+        if entry is None:
+            # 没见过这个目录: 建一条最小记录, 其余字段留给 Claude Code 自己补
+            entry = projects[key] = {}
+        if entry.get("hasTrustDialogAccepted") is True:
+            return True                     # 本来就信任, 不写盘
+        entry["hasTrustDialogAccepted"] = True
+        tmp = path + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+
+
+def close_window(hwnd):
+    """礼貌地请一个窗口自己关掉(WM_CLOSE), 不强杀。
+
+    只用来收掉**已经空掉的**终端窗口 —— 真正结束对话走 close_claude()。
+    PostMessage 是异步的: 发出去就返回, 窗口自己决定关不关(有未保存内容时它可以弹框)。
+    """
+    if not hwnd:
+        return False
+    try:
+        WM_CLOSE = 0x0010
+        return bool(_u32().PostMessageW(hwnd, WM_CLOSE, 0, 0))
+    except Exception:
+        return False
+
+
+def close_claude(pid, ctime=None, hwnd=None, close_terminal=False, timeout=5.0):
+    """结束一个对话进程(以及它派生的子进程)。
+
+    **动手前先验明正身**, 这是硬约束不是可选项: 进程名必须是 claude.exe, 创建时间
+    必须和记账时对得上(±2s)。pid 会被系统回收再分配 —— 少了这一步, 一个早就退出的
+    对话的旧 pid 可能已经属于别人的进程, 关"窗口"就变成了随机杀进程。
+
+    连子进程一起收: claude 派生出来的 shell / 工具进程在父进程没了之后会变成孤儿,
+    继续占着端口和文件。这与直接关掉终端窗口的效果一致(那时 conhost 也是杀整棵树)。
+    **只杀这一棵 pid 树** —— 绝不按窗口标题去 taskkill, 那个过滤器在 Win10+ 上会
+    静默失效并杀光同名进程(README 里记着这笔学费)。
+
+    close_terminal=True 时, 进程收干净后再给终端窗口发一个 WM_CLOSE。调用方必须
+    先确认这个终端窗口里没有别的对话(Windows Terminal 是单窗口多标签, 关窗 =
+    关掉里面所有标签页)。
+    """
+    if not pid:
+        return {"ok": False, "why": "没有记录到进程"}
+    try:
+        import psutil
+    except Exception:
+        return {"ok": False, "why": "需要 psutil 才能安全地结束进程(pip install psutil)"}
+
+    try:
+        p = psutil.Process(int(pid))
+        name = (p.name() or "").lower()
+        if name not in config.CLAUDE_PROCS:
+            return {"ok": False, "why": "pid %s 现在是 %s, 不在 %s 里 — 不动它"
+                                        % (pid, name, "/".join(config.CLAUDE_PROCS))}
+        if ctime is not None and abs(p.create_time() - float(ctime)) >= 2.0:
+            return {"ok": False, "why": "pid %s 的创建时间对不上(它已经被系统回收给别的进程了)" % pid}
+        kids = p.children(recursive=True)
+    except psutil.NoSuchProcess:
+        return {"ok": True, "already": True, "why": "进程本来就已经不在了"}
+    except Exception as e:
+        return {"ok": False, "why": str(e)}
+
+    for proc in kids + [p]:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    gone, alive = psutil.wait_procs(kids + [p], timeout=timeout)
+    for proc in alive:                      # 赖着不走的再来一次硬的
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    if alive:
+        psutil.wait_procs(alive, timeout=2.0)
+
+    out = {"ok": True, "killed": len(gone) + len(alive), "children": len(kids)}
+    if close_terminal and hwnd:
+        out["terminal_closed"] = close_window(hwnd)
+    return out
+
+
 # ---------------------------------------------------------------- 键盘注入
 
 VK_RETURN = 0x0D

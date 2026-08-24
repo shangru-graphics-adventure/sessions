@@ -24,6 +24,9 @@ import config                             # 本机配置(端口/路径), 见 con
 import actions                            # 窗口定位与按键注入
 from preview import preview_html, reveal   # 产物预览/定位, 见 preview.py
 
+import utf8_console
+utf8_console.enable()
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = config.PROJECTS_DIR
 NOTES_PATH = os.path.join(HERE, "notes.json")
@@ -343,36 +346,53 @@ def save_cache():
 
 # ---------------------------------------------------------------- 实时状态
 
-_alive_cache = [0.0, {}]        # [取样时间, {pid: create_time}]
+_alive_cache = {}               # pid -> [取样时刻, create_time 或 None(=不在了)]
+ALIVE_TTL = 2.0
 
 
 def alive_pids(pids):
-    """这些 pid 里, 哪些还是活着的 claude.exe? 返回 {pid: 创建时间}。
+    """这些 pid 里, 哪些还是活着的 claude 进程? 返回 {pid: 创建时间}。
 
-    **只查我们关心的那几十个 pid, 绝不遍历全表**。实测(bench_pids.py, 47 个 claude 进程):
+    **只查传进来的这几十个 pid, 绝不遍历全表**。实测(bench_pids.py, 47 个 claude 进程):
         psutil.process_iter 全表   9022 ms   <- 页面每 2 秒轮询一次, 这个数字是灾难
         只查已知的 47 个 pid          1.0 ms   <- 结果与全表完全一致
         Toolhelp32 快照              52 ms
-    结果缓存 2 秒。
+
+    缓存是**按 pid 逐个**存的, 不是"整批结果存一份"。曾经是后者, 结果只查单个会话
+    的接口(切窗口/关窗口)会把全局缓存覆盖成"只有这一个会话的 pid", 接下来 2 秒里
+    页面上**其它所有对话的徽章会集体消失**(它们的 pid 不在缓存里 = 判定已关闭)。
+    逐 pid 缓存没有这个耦合: 谁问谁的, 互不干扰。
     """
     now = time.time()
-    if now - _alive_cache[0] < 2.0:
-        return _alive_cache[1]
-    m = {}
-    try:
-        import psutil
-        for pid in set(p for p in pids if p):
-            try:
-                p = psutil.Process(pid)
-                if p.name().lower() == "claude.exe":
-                    m[pid] = p.create_time()
-            except Exception:
-                pass
-    except Exception:
-        pass
-    _alive_cache[0] = now
-    _alive_cache[1] = m
-    return m
+    out = {}
+    todo = []
+    for pid in set(p for p in pids if p):
+        hit = _alive_cache.get(pid)
+        if hit and now - hit[0] < ALIVE_TTL:
+            if hit[1] is not None:
+                out[pid] = hit[1]
+        else:
+            todo.append(pid)
+    if todo:
+        try:
+            import psutil
+            for pid in todo:
+                ct = None
+                try:
+                    p = psutil.Process(pid)
+                    if p.name().lower() in config.CLAUDE_PROCS:
+                        ct = p.create_time()
+                except Exception:
+                    ct = None
+                _alive_cache[pid] = [now, ct]
+                if ct is not None:
+                    out[pid] = ct
+        except Exception:
+            pass                      # 没装 psutil: 一律当作查不到, 不假装知道
+    if len(_alive_cache) > 512:       # 死 pid 会慢慢堆积, 定期扫掉过期的
+        for k in [k for k, v in _alive_cache.items() if now - v[0] > 60]:
+            _alive_cache.pop(k, None)
+    return out
 
 
 def _iso_epoch(s):
@@ -497,6 +517,51 @@ def load_states():
     return out
 
 
+PROC_KEYS = ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")
+
+
+def rec_procs(rec):
+    """这个对话记过账的所有进程。兼容只有顶层 pid 的旧 state 文件。"""
+    ps = rec.get("procs")
+    if isinstance(ps, list) and ps:
+        return ps
+    if rec.get("pid"):
+        return [{k: rec.get(k) for k in PROC_KEYS}]
+    return []
+
+
+def live_windows(rec, alive):
+    """此刻**真的还开着**的那几个窗口。
+
+    一个对话可以被 resume 到多个窗口里(它们共用 session_id), 所以这里返回的是
+    一个列表, 通常 0 或 1 个; 出现 2 个以上就是"你重复打开了同一个对话",
+    页面会告警 —— 两个窗口写同一份 jsonl, 是会互相覆盖的。
+    """
+    out = []
+    for e in rec_procs(rec):
+        pid, ct = e.get("pid"), e.get("pid_ctime")
+        if not pid or pid not in alive:
+            continue
+        if ct is not None and abs(alive[pid] - ct) >= 2.0:
+            continue                              # pid 被回收给了别的进程
+        out.append({
+            "pid": pid,
+            "hwnd": e.get("hwnd"),
+            "term_pid": e.get("term_pid"),
+            "term": e.get("term_name") or "",
+            "title": e.get("win_title") or "",
+            "ts": e.get("ts"),
+        })
+    return out
+
+
+def all_pids(states):
+    out = []
+    for rec in states.values():
+        out += [e.get("pid") for e in rec_procs(rec)]
+    return out
+
+
 def resolve_state(rec, alive):
     """把 hook 记的账 + 进程是否还活着, 合成最终状态。
 
@@ -504,13 +569,7 @@ def resolve_state(rec, alive):
     基本不触发(实测 2299 个会话里只有 148 个留下过 SessionEnd 记录), 所以不管
     hook 最后记的是 running 还是 done, 进程没了就是 closed。
     """
-    pid = rec.get("pid")
-    ct = rec.get("pid_ctime")
-    ok = False
-    if pid and pid in alive:
-        got = alive[pid]
-        ok = (ct is None) or abs(got - ct) < 2.0     # 防 pid 复用
-    if not ok:
+    if not live_windows(rec, alive):                 # 一个活着的窗口都没有
         return "closed"
     st = rec.get("state") or "done"
     if st == "closed":                                # 进程还在, 说明只是 /clear
@@ -520,11 +579,12 @@ def resolve_state(rec, alive):
 
 def status_map(with_activity=True):
     states = load_states()
-    alive = alive_pids([r.get("pid") for r in states.values()])
+    alive = alive_pids(all_pids(states))
     now = time.time()
     out = {}
     for sid, rec in states.items():
         st = resolve_state(rec, alive)
+        wins = live_windows(rec, alive)
         row = {
             "state": st,
             "goal": rec.get("goal", ""),
@@ -535,6 +595,8 @@ def status_map(with_activity=True):
             "age": round(now - (rec.get("ts") or now), 1),
             "term": rec.get("term_name", ""),
             "pid": rec.get("pid"),
+            # 开着这个对话的窗口(可能不止一个 —— 那就是要提醒你关掉的情况)
+            "wins": wins,
         }
         # 只对还活着的会话去读 jsonl 尾部 —— 这才是"此刻在干什么"的实时来源
         if with_activity and st != "closed":
@@ -822,7 +884,13 @@ def _find_window(title, timeout=8.0):
     return 0
 
 
-def do_resume(sid, cwd, terminal="type"):
+def windows_of(sid):
+    """某一个对话此刻开着的窗口。给 resume / 切过去 / 关闭 三个动作共用。"""
+    rec = load_states().get(sid) or {}
+    return rec, live_windows(rec, alive_pids(all_pids({sid: rec})))
+
+
+def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
     """在终端里 resume。默认**照着你手动开 cmd 的样子来**。
 
     模式:
@@ -838,11 +906,39 @@ def do_resume(sid, cwd, terminal="type"):
 
     type 模式会**抢一下焦点**(要敲键盘)。actions.type_into_window 里有硬约束:
     切不到目标窗口就直接放弃, 绝不对着别的窗口乱敲。
+
+    prefer_existing(默认开): 先查这个对话是不是已经开着 —— 开着一个就直接切过去
+    不再新开; 开着两个以上直接拒绝并把它们列出来, 让你先关到只剩一个。
     """
     if not cwd or not os.path.isdir(cwd):
         cwd = os.path.expanduser("~")
+
+    # 已经开着的窗口优先 —— 同一个对话被 resume 进两个窗口时, 两边写同一份 jsonl,
+    # 后写的会覆盖先写的。所以这里不是"体贴", 是防数据互相踩。
+    if prefer_existing:
+        _, wins = windows_of(sid)
+        if len(wins) > 1:
+            return {"ok": False, "conflict": True, "wins": wins,
+                    "why": "这个对话已经开在 %d 个窗口里了 —— 先关到只剩一个"
+                           % len(wins)}
+        if len(wins) == 1:
+            r = actions.focus_window(wins[0].get("hwnd"))
+            r.update({"switched": True, "win": wins[0]})
+            if not r.get("ok") and not wins[0].get("hwnd"):
+                r["why"] = "它开着(pid %s), 但没记到窗口句柄 —— 请自己切过去" % wins[0]["pid"]
+            return r
+
     title = "claude %s" % sid[:8]
     line = "claude --resume %s" % sid
+    if dry_run:                            # 测试用: 只回报要做什么, 不真的开窗口
+        # dry-run 必须**没有任何副作用** —— 包括不去改 ~/.claude.json 的信任位
+        return {"ok": True, "dry": True, "cwd": cwd, "terminal": terminal,
+                "would_trust": bool(config.AUTO_TRUST),
+                "cmd": "cd /d %s && %s" % (cwd, line)}
+
+    # 新窗口起来之前先把目录标成已信任, 否则第一屏是 trust 对话框, 敲进去的
+    # `claude --resume` 会卡在那儿等你按 y。(切到已有窗口那条路不需要, 它早就信任过了。)
+    trusted = actions.trust_folder(cwd) if config.AUTO_TRUST else None
 
     if terminal in ("type", "type-new") and WT_EXE:
         args = [WT_EXE, "-w", "0" if terminal == "type" else "new",
@@ -860,7 +956,7 @@ def do_resume(sid, cwd, terminal="type"):
         if not r.get("ok"):
             return {"ok": False, "why": r.get("why"), "terminal": "wt/type",
                     "cmd": "cd /d %s && %s" % (cwd, line)}
-        return {"ok": True, "cwd": cwd, "terminal": "wt/type",
+        return {"ok": True, "cwd": cwd, "terminal": "wt/type", "trusted": trusted,
                 "cmd": "cd /d %s && %s" % (cwd, line)}
 
     if terminal != "conhost" and WT_EXE:
@@ -877,7 +973,7 @@ def do_resume(sid, cwd, terminal="type"):
                          creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
         used = "conhost"
 
-    return {"ok": True, "cwd": cwd, "terminal": used,
+    return {"ok": True, "cwd": cwd, "terminal": used, "trusted": trusted,
             "cmd": "cd /d %s && %s" % (cwd, line)}
 
 
@@ -999,7 +1095,58 @@ class Handler(BaseHTTPRequestHandler):
             cwd = data.get("cwd", "")
             if not sid:
                 return self._send(400, {"error": "no id"})
-            return self._send(200, do_resume(sid, cwd, data.get("terminal", "type")))
+            return self._send(200, do_resume(
+                sid, cwd, data.get("terminal", "type"),
+                prefer_existing=data.get("prefer_existing", True),
+                dry_run=bool(data.get("dry_run"))))
+
+        if u.path == "/api/focus":
+            # 切到已经开着的那个窗口。多个窗口时必须指明 pid。
+            sid = data.get("id", "")
+            if not sid:
+                return self._send(400, {"error": "no id"})
+            _, wins = windows_of(sid)
+            if not wins:
+                return self._send(200, {"ok": False, "why": "这个对话没有开着的窗口"})
+            pid = data.get("pid")
+            w = next((x for x in wins if x["pid"] == pid), None) if pid else (
+                wins[0] if len(wins) == 1 else None)
+            if w is None:
+                return self._send(200, {"ok": False, "conflict": True, "wins": wins,
+                                        "why": "开着 %d 个窗口, 要指明切哪一个" % len(wins)})
+            r = actions.focus_window(w.get("hwnd"))
+            r["win"] = w
+            if not w.get("hwnd"):
+                r["why"] = "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]
+            return self._send(200, r)
+
+        if u.path == "/api/close":
+            # 结束这个对话的进程。close_terminal 只在该终端窗口里没有别的已知对话时才做。
+            sid = data.get("id", "")
+            pid = data.get("pid")
+            if not sid or not pid:
+                return self._send(400, {"error": "need id + pid"})
+            states = load_states()
+            alive = alive_pids(all_pids(states))
+            rec = states.get(sid) or {}
+            w = next((x for x in live_windows(rec, alive) if x["pid"] == pid), None)
+            if w is None:
+                return self._send(200, {"ok": False, "why": "这个 pid 不在该对话活着的窗口里(可能已经关了)"})
+            ct = next((e.get("pid_ctime") for e in rec_procs(rec) if e.get("pid") == pid), None)
+            # 这个终端窗口里还有别的对话吗? 有就绝不关窗 —— Windows Terminal 是
+            # 单窗口多标签, 关窗会连带关掉别人。
+            others = [x["pid"] for sid2, r2 in states.items()
+                      for x in live_windows(r2, alive)
+                      if x.get("term_pid") and x["term_pid"] == w.get("term_pid")
+                      and x["pid"] != pid]
+            want_term = bool(data.get("close_terminal", True))
+            r = actions.close_claude(pid, ct, hwnd=w.get("hwnd"),
+                                     close_terminal=want_term and not others)
+            r["siblings"] = len(others)
+            if others and want_term:
+                r["note"] = ("这个终端窗口里还开着 %d 个别的对话, 所以只结束了这一个, "
+                             "窗口留着" % len(others))
+            return self._send(200, r)
 
         return self._send(404, {"error": "no route"})
 

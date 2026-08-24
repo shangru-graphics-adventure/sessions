@@ -11,12 +11,23 @@
     --bg:#fbfcfe; --surface:#fff; --chip:#f1f5f9; --border:#e2e8f0;
     --text:#1f2933; --dim:#7c8896;
   }
+  /* 深色。两个选择器写同一份值:
+     · 媒体查询 = 跟随系统(默认), 但 data-theme=light 能把它挡回去
+     · [data-theme=dark] = 你在页面上手动锁定的深色, 与系统设置无关
+     右上角那个 ◐ 按钮在三档之间循环, 选择存在 localStorage 里。
+     没有这个开关的话, 一台深色模式的电脑上永远看不到粉蓝那套配色。 */
   @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
     --sky:#5cc6ff; --sky-soft:rgba(92,198,255,.14); --sky-line:rgba(92,198,255,.4);
     --pink:#ff8cb4; --pink-soft:rgba(255,140,180,.14); --pink-line:rgba(255,140,180,.4);
     --bg:#10141a; --surface:#161c24; --chip:#1d242e; --border:#28313d;
     --text:#e6ebf1; --dim:#8b97a6;
   }}
+  :root[data-theme=dark]{
+    --sky:#5cc6ff; --sky-soft:rgba(92,198,255,.14); --sky-line:rgba(92,198,255,.4);
+    --pink:#ff8cb4; --pink-soft:rgba(255,140,180,.14); --pink-line:rgba(255,140,180,.4);
+    --bg:#10141a; --surface:#161c24; --chip:#1d242e; --border:#28313d;
+    --text:#e6ebf1; --dim:#8b97a6;
+  }
   *{box-sizing:border-box}
   body{margin:0 auto;max-width:960px;background:var(--bg);color:var(--text);
     font:13px/1.45 "Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
@@ -120,12 +131,20 @@
   #planner .foot .note{margin-right:auto;font-size:.62rem;color:var(--dim)}
   .hidden{display:none}
 </style>
+<script>
+  // 必须在 body 渲染之前跑, 否则会先闪一下系统主题再跳过来
+  try{
+    var t = localStorage.getItem("theme");
+    if(t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  }catch(e){}
+</script>
 </head>
 <body>
 
 <header>
   <h1>Ticket <span>台</span></h1>
   <span class="meta" id="stat">–</span>
+  <button class="tiny" id="btn-theme" title="配色: 跟随系统 / 浅色 / 深色">◐</button>
   <button class="tiny" id="btn-refresh">刷新</button>
 </header>
 
@@ -564,6 +583,31 @@ $('#add').onsubmit = async e => {
 };
 $('#btn-plan').onclick = () => openPlanner($('#btn-plan'), null);
 $('#btn-refresh').onclick = () => api('/api/state');
+
+// 配色三档循环: 跟随系统 -> 浅色 -> 深色。存 localStorage, 刷新后还在。
+// (页面默认跟随系统, 所以在一台深色模式的机器上打开会是深色版 —— 想要粉蓝
+//  那套浅色, 点这个按钮切到「浅色」锁住即可。)
+const THEMES = [
+  {v: "",      icon: "◐", name: "跟随系统"},
+  {v: "light", icon: "☀", name: "浅色"},
+  {v: "dark",  icon: "☾", name: "深色"},
+];
+function applyTheme(v){
+  if(v) document.documentElement.dataset.theme = v;
+  else  delete document.documentElement.dataset.theme;
+  const t = THEMES.find(x => x.v === v) || THEMES[0];
+  const b = $('#btn-theme');
+  b.textContent = t.icon;
+  b.title = "配色: " + t.name + "(点击切换)";
+  try{ v ? localStorage.setItem("theme", v) : localStorage.removeItem("theme"); }catch(e){}
+}
+$('#btn-theme').onclick = () => {
+  let cur = "";
+  try{ cur = localStorage.getItem("theme") || ""; }catch(e){}
+  const i = THEMES.findIndex(x => x.v === cur);
+  applyTheme(THEMES[(i < 0 ? 0 : i + 1) % THEMES.length].v);
+};
+(function(){ let v = ""; try{ v = localStorage.getItem("theme") || ""; }catch(e){} applyTheme(v); })();
 $('#arc-head').onclick = () => { arcOpen = !arcOpen; render(); };
 
 /* ---------- 拖动排序（同层） ---------- */

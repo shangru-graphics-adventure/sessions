@@ -10,6 +10,9 @@ import os, io, json, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
+import utf8_console
+utf8_console.enable()
+
 PROJ = config.PROJECTS_DIR
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus.jsonl")
 

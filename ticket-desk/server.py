@@ -21,6 +21,9 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import utf8_console
+utf8_console.enable()
+
 HERE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("TICKET_DATA") or (HERE / "tickets.json"))
 PORT = int(os.environ.get("TICKET_PORT") or 8730)

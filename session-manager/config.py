@@ -70,6 +70,22 @@ ARCHIVE_DIRS = _list("archive_dirs", "SESSIONS_ARCHIVE_DIRS", [])
 PROJECT_ROOTS = _list("project_roots", "SESSIONS_PROJECT_ROOTS", [HOME])
 
 
+# "这个对话还开着吗" = 它的进程还在吗。进程名默认就是 claude.exe; 如果你用别的
+# 封装(某些安装方式下宿主是 node.exe)就在这里加, 否则实时状态与窗口感知会全灭。
+CLAUDE_PROCS = tuple(
+    n.strip().lower() for n in
+    (os.environ.get("SESSIONS_CLAUDE_PROCS") or "").split(os.pathsep) if n.strip()
+) or tuple(n.lower() for n in _cfg.get("claude_procs", ["claude.exe"]))
+
+
+# Resume 一个对话时, 先把它的工作目录标记成"已信任", 免得新窗口第一屏是那个
+# "Do you trust the files in this folder?" 对话框。默认开: 本工具 resume 的都是
+# **你自己已经在里面工作过**的目录, 那个提示在这个场景下是纯噪音。
+# 不想要就 config.json 里 "auto_trust": false, 或环境变量 SESSIONS_AUTO_TRUST=0。
+_at = os.environ.get("SESSIONS_AUTO_TRUST")
+AUTO_TRUST = (_at not in ("0", "false", "no")) if _at is not None     else bool(_cfg.get("auto_trust", True))
+
+
 def project_slug(path):
     """Claude Code's directory name for a cwd: every non-alphanumeric char -> '-'.
 

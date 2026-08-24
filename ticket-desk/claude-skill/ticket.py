@@ -46,8 +46,21 @@ def _find_app() -> Path:
 APP = _find_app()
 CREATE_NO_WINDOW = 0x08000000
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+# 输出一律走 UTF-8: 这个脚本会被拷到 ~/.claude/skills/ 下单独跑, 那台机器的控制台
+# code page 可能是 1252/936, 不这么做 print 中文会崩或变乱码。内联而不 import
+# utf8_console, 是因为拷过去之后旁边没有那个模块。
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------- 服务

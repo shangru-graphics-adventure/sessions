@@ -7,6 +7,11 @@
 import os, io, json, sys, time, subprocess, threading
 from concurrent.futures import ThreadPoolExecutor
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import utf8_console
+utf8_console.enable()
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORPUS = os.path.join(HERE, "corpus.jsonl")
 OUT = os.path.join(HERE, "titles.jsonl")

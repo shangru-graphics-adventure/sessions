@@ -12,6 +12,9 @@ import json
 import locale
 import subprocess
 
+import utf8_console
+utf8_console.enable()
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROBE = os.path.join(HERE, "_stdin_probe.py")
 TEXT = "读并补齐 中文测试"
