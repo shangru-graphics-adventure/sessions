@@ -515,13 +515,30 @@ $("#list").addEventListener("click", async e => {
     if(btn.classList.contains("busy")) return;          // 20 秒一次, 别让人连点
     btn.classList.add("busy");
     const t0 = performance.now();
+    // 预计耗时: 用上几次的实测值滑动平均, 没有历史就用 22 秒(README 实测 18-25 秒)。
+    // 一个要等 20 多秒、期间没有任何反馈的按钮, 会让人以为它死了 —— 所以每 250ms
+    // 报一次"已经多久 / 还要多久", 超时之后如实说"比平常久", 不装作还在预估内。
+    const eta = Math.max(5, +localStorage.getItem("retitleEta") || 22);
+    const tick = setInterval(() => {
+      const el = (performance.now() - t0) / 1000;
+      btn.textContent = Math.round(el) + "s";
+      $("#stat").textContent = el < eta
+        ? `正在用 haiku 总结标题… 已 ${el.toFixed(0)}s · 预计还要 ${Math.ceil(eta - el)}s`
+        : `正在用 haiku 总结标题… 已 ${el.toFixed(0)}s（比平常久, 平常约 ${eta.toFixed(0)}s）`;
+    }, 250);
     let d = {};
     try{
       const r = await fetch("/api/retitle", {method:"POST",
         headers:{"Content-Type":"application/json"}, body: JSON.stringify({id})});
       d = await r.json();
     }catch(err){ d = {ok:false, error:String(err)}; }
+    clearInterval(tick);
+    btn.textContent = "↻";
     btn.classList.remove("busy");
+    if(d.ok && d.ms){                                    // 用真实耗时把预估校准过来
+      const next = eta * 0.7 + (d.ms / 1000) * 0.3;
+      try{ localStorage.setItem("retitleEta", next.toFixed(1)); }catch(_){}
+    }
     if(d.ok){
       rec.auto_title = d.title;                          // 就地更新, 不重拉整表
       const inp = row.querySelector(".title");

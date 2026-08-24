@@ -16,6 +16,11 @@ import config
 import utf8_console
 utf8_console.enable()
 
+# 子进程绝不弹黑框。claude.exe 是控制台程序: 当 server 本身**没有控制台**时
+# (用 pythonw 起的常态), 它会自己新建一个控制台窗口, 于是每总结一个标题就闪一个黑框。
+# 用 python.exe 起时子进程继承控制台、看不出问题 —— 这个坑只在换成 pythonw 之后才现形。
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = config.PROJECTS_DIR
 TITLES = os.path.join(HERE, "titles.jsonl")
@@ -61,7 +66,7 @@ def gen_title(msgs, timeout=180):
     try:
         r = subprocess.run(CMD, input=p.encode("utf-8"),
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           timeout=timeout)
+                           timeout=timeout, creationflags=NO_WINDOW)
     except Exception as e:
         return "", str(e)[:200]
     t = clean(r.stdout.decode("utf-8", "replace"))

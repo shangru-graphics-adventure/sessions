@@ -169,6 +169,49 @@ def trust_folder(cwd, path=None):
         return False
 
 
+def window_for_pid(pid, hops=6):
+    """从任意一个进程出发, 沿父链找到第一个"有唯一可见窗口"的祖先, 返回它的 HWND。
+
+    比认死一个 term_pid 更耐用: VS Code 里承载对话的是**没有窗口**的渲染进程, 而且
+    重载窗口之后那个 pid 还会变; 从活着的 claude 进程往上走则一定能走到 IDE 主窗口。
+    "唯一"这个条件是故意的 —— 一个进程有好几个可见窗口时认不准是哪个, 宁可返回 0。
+    """
+    if not pid or os.name != "nt":
+        return 0
+    try:
+        import ctypes.wintypes as wt
+        import psutil
+        u32 = _u32()
+        Enum = ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+
+        def windows_of(target):
+            got = []
+
+            def cb(h, _):
+                p = wt.DWORD()
+                u32.GetWindowThreadProcessId(h, ctypes.byref(p))
+                if p.value == target and u32.IsWindowVisible(h):
+                    got.append(h)
+                return True
+
+            u32.EnumWindows(Enum(cb), 0)
+            return got
+
+        p = psutil.Process(pid)
+        for _ in range(hops):
+            ws = windows_of(p.pid)
+            if len(ws) == 1:
+                return int(ws[0])
+            if ws:
+                return 0                 # 好几个, 认不准
+            p = p.parent()
+            if p is None:
+                break
+    except Exception:
+        pass
+    return 0
+
+
 def close_window(hwnd):
     """礼貌地请一个窗口自己关掉(WM_CLOSE), 不强杀。
 
@@ -186,6 +229,11 @@ def close_window(hwnd):
 
 # 一个终端标签页里的 shell。杀掉它, VS Code 会把那个标签页收掉(实测 2026-08-24:
 # 标签页确实消失了)。只认这几个名字 —— 父进程不是已知 shell 就绝不动它。
+# 子进程绝不弹黑框。claude.exe 是控制台程序: 当 server 本身**没有控制台**时
+# (用 pythonw 起的常态), 它会自己新建一个控制台窗口, 于是每总结一个标题就闪一个黑框。
+# 用 python.exe 起时子进程继承控制台、看不出问题 —— 这个坑只在换成 pythonw 之后才现形。
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 SHELLS = ("powershell.exe", "pwsh.exe", "cmd.exe", "bash.exe", "zsh.exe", "sh.exe",
           "git-bash.exe", "nu.exe", "fish.exe")
 
@@ -467,7 +515,7 @@ def haiku_title(topics, timeout=90):
             ["claude", "-p", "--model", "claude-haiku-4-5"],
             input=body.encode("utf-8"),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=timeout, shell=False)
+            timeout=timeout, shell=False, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return {"ok": False, "why": "claude -p 超时(%ds)" % timeout}
     except Exception as e:
