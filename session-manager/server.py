@@ -1055,9 +1055,21 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
         # 退回终端那条路, 并在返回里说清楚为什么。
         via = actions.bridge("/new", {"cwd": cwd, "cmd": line, "name": title})
         if via and via.get("ok"):
-            return {"ok": True, "cwd": cwd, "terminal": "vscode", "trusted": trusted,
-                    "shell_pid": via.get("pid"), "tab": via.get("name"),
-                    "cmd": "cd /d %s && %s" % (cwd, line)}
+            # createTerminal + show() 只是在 VS Code **内部**把新终端设为活动标签,
+            # IDE 窗口本身还留在你身后 —— 和 Terminal.show() 在 focus 里的坑一模一样,
+            # 提前台永远是我们自己的事。窗口从新终端的 shell pid 沿父链找。
+            fg = {}
+            if via.get("pid"):
+                hwnd = actions.window_for_pid(via["pid"])
+                if hwnd:
+                    fg = actions.focus_window(hwnd)
+            r = {"ok": True, "cwd": cwd, "terminal": "vscode", "trusted": trusted,
+                 "shell_pid": via.get("pid"), "tab": via.get("name"),
+                 "raised": bool(fg.get("ok")),
+                 "cmd": "cd /d %s && %s" % (cwd, line)}
+            if not fg.get("ok"):
+                r["why"] = "已在 VS Code 开好终端, 但 IDE 窗口没能提到前台 — 点一下任务栏"
+            return r
         fell_back = (via or {}).get("why") or "没找到 VS Code 桥(扩展没装? VS Code 没开?)"
         terminal = "type"                     # 退回原来的做法
     else:
