@@ -930,25 +930,25 @@ def focus_win(w):
     的行为。
     """
     host = (w.get("owner") or w.get("term") or "").lower()
+    # 句柄统一在这里解析一次: hook 记过就用记的, 没记(老 state)或记的是 None 就现场
+    # 从活着的进程沿父链找。**桥那条路也要用它** —— Terminal.show() 只在 VS Code
+    # 内部切标签, 不会把 IDE 窗口提到前台, 那一步得我们自己做。
+    hwnd = w.get("hwnd") or actions.window_for_pid(w.get("pid"))
+
     if host == "code.exe" and w.get("shell_pid"):
         via = actions.bridge("/show", {"pid": w["shell_pid"]})
         if via and via.get("ok"):
-            # 标签显示出来了, 但 IDE 窗口本身可能还在后台, 顺手也切一下
-            actions.focus_window(w.get("hwnd"))
-            return {"ok": True, "how": "vscode-bridge", "win": w,
-                    "title": via.get("shown") or "", "tab": True}
+            fg = actions.focus_window(hwnd)
+            r = {"ok": True, "how": "vscode-bridge", "win": w,
+                 "title": via.get("shown") or "", "tab": True,
+                 "raised": bool(fg.get("ok"))}
+            if not fg.get("ok"):
+                r["why"] = ("标签页切过去了, 但 IDE 窗口没能提到前台(%s) — 点一下任务栏"
+                            % (fg.get("why") or "没有窗口句柄"))
+            return r
         if via:
             return {"ok": False, "win": w, "how": "vscode-bridge",
                     "why": via.get("why") or "桥说它找不到这个终端"}
-    hwnd = w.get("hwnd")
-    if not hwnd and w.get("term_pid"):
-        # 同样是兜底: 老 state 里没有句柄(那时的 capture_window 还不会沿父链找),
-        # 现场按当前的规则再找一次, 免得升级后非得等 hook 重记一遍
-        try:
-            import hook_state
-            hwnd = (hook_state.capture_window(w["term_pid"]) or {}).get("hwnd")
-        except Exception:
-            hwnd = None
     r = actions.focus_window(hwnd)
     r["win"] = w
     if not hwnd:

@@ -60,6 +60,7 @@ Python 3.8+。**唯一的第三方包是 `psutil`** —— "这个对话的进�
 | 注释框 | 自由文本, 失焦自动存。聚焦时自动变高 |
 | ★ | 星标, 配合顶部「只看星标」 |
 | 搜索框 | 输入即过滤**已加载的**(标题/注释/话题/路径/id) |
+| ↻ 重起标题 | 跑一次 `claude -p`(约 15-25 秒)。按钮上走秒, 状态行报"已 Ns · 预计还要 Ms" —— 预估值用前几次的实测滑动平均, 超时后如实说"比平常久"而不是继续装在预估内 |
 | 全文搜索 | 按 Enter 或点按钮, 到对话正文里搜(默认扫最近 400 个, 约 2 秒) |
 | Resume | 弹一个新 **Windows Terminal** 窗口, 自动 `cd` 回原 cwd 再 `claude --resume <id>` |
 | 复制命令 | 不想弹窗时, 复制两行命令自己贴 |
@@ -391,7 +392,9 @@ hook:    shell pid=45848 powershell.exe  (claude 的父进程)
 
 装了之后:
 
-- `⇥ 切过去` 直接把**那个终端标签页**显示出来(`Terminal.show()`), 再顺手把 IDE 窗口切到前台
+- `⇥ 切过去` 直接把**那个终端标签页**显示出来(`Terminal.show()`), 再自己把 IDE 窗口提到前台
+  —— **两步都要做**: `Terminal.show()` 只在 VS Code 内部切标签, 不会把 OS 窗口拉到前面,
+  那一步得靠 `SetForegroundWindow`。少了它, 标签是切了, 但你还盯着原来那个窗口, 看起来像没反应。
 - `✕ 连标签页` 改走 `Terminal.dispose()` —— VS Code 自己的关法, 标签干干净净消失,
   不会留下"terminal process terminated with exit code"那条提示(杀 shell 的兜底做法会)
 
@@ -431,6 +434,18 @@ resume 失败 —— 大不了你自己点一下那个对话框。
 
 只在你**按下 Resume 的那一刻**、针对**那一个目录**做; 切到已有窗口那条路不碰它。
 不想要就 `config.json` 里 `"auto_trust": false`(或 `SESSIONS_AUTO_TRUST=0`)。
+
+## 别让子进程弹黑框
+
+`↻ 重起标题` 会跑一次 `claude -p`。**`claude.exe` 是控制台程序**: 当 server 本身没有控制台
+(用 `pythonw` 起的常态)时, 它会给自己新建一个控制台窗口 —— 于是每总结一个标题就闪一个黑框。
+
+用 `python.exe` 起时子进程继承了控制台, 看不出问题, **这个坑只在换成 `pythonw` 之后才现形**。
+所有 `claude -p` 的调用都带上了 `creationflags=CREATE_NO_WINDOW`(`actions.py` / `titler/gen.py`
+/ `titler/run_titles.py` 三处)。
+
+验证方式不是"看一眼屏幕", 而是: 调 `/api/retitle` 的同时每 150ms 枚举一次所有可见窗口,
+比对前后差集 —— 实测新增 0 个窗口。
 
 ## 换一台机器: 编码
 
