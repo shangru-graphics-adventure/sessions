@@ -1141,11 +1141,14 @@ class Handler(BaseHTTPRequestHandler):
                       and x["pid"] != pid]
             want_term = bool(data.get("close_terminal", True))
             r = actions.close_claude(pid, ct, hwnd=w.get("hwnd"),
-                                     close_terminal=want_term and not others)
+                                     close_terminal=want_term and not others,
+                                     term_name=w.get("term"))
             r["siblings"] = len(others)
             if others and want_term:
                 r["note"] = ("这个终端窗口里还开着 %d 个别的对话, 所以只结束了这一个, "
                              "窗口留着" % len(others))
+            elif r.get("term_kept"):
+                r["note"] = r["term_kept"]
             return self._send(200, r)
 
         return self._send(404, {"error": "no route"})

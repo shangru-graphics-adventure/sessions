@@ -86,6 +86,18 @@ _at = os.environ.get("SESSIONS_AUTO_TRUST")
 AUTO_TRUST = (_at not in ("0", "false", "no")) if _at is not None     else bool(_cfg.get("auto_trust", True))
 
 
+# 关掉一个对话时, 顺手把它的窗口也关掉 —— 但**只对纯终端宿主**这么做。
+# 这是白名单不是黑名单, 因为认不出来的宿主一律当作"不能关"才安全:
+#   · Code.exe   —— VS Code 集成终端。那个窗口里还装着你的编辑器, 关掉 = 关掉整个 IDE
+#   · explorer.exe —— 关掉 = 桌面和任务栏一起没
+# 这两个都出现在 hook 认终端的名单里(它们确实可能是 claude 的祖先进程),
+# 所以少了这道白名单, "关闭对话"会变成"关闭你的编辑器"。
+CLOSABLE_TERMS = tuple(n.lower() for n in _cfg.get("closable_terms", [
+    "windowsterminal.exe", "conhost.exe", "openconsole.exe",
+    "cmd.exe", "powershell.exe", "pwsh.exe",
+]))
+
+
 def project_slug(path):
     """Claude Code's directory name for a cwd: every non-alphanumeric char -> '-'.
 

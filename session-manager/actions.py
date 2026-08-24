@@ -149,7 +149,8 @@ def close_window(hwnd):
         return False
 
 
-def close_claude(pid, ctime=None, hwnd=None, close_terminal=False, timeout=5.0):
+def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
+                 term_name=None, timeout=5.0):
     """结束一个对话进程(以及它派生的子进程)。
 
     **动手前先验明正身**, 这是硬约束不是可选项: 进程名必须是 claude.exe, 创建时间
@@ -161,9 +162,12 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False, timeout=5.0):
     **只杀这一棵 pid 树** —— 绝不按窗口标题去 taskkill, 那个过滤器在 Win10+ 上会
     静默失效并杀光同名进程(README 里记着这笔学费)。
 
-    close_terminal=True 时, 进程收干净后再给终端窗口发一个 WM_CLOSE。调用方必须
-    先确认这个终端窗口里没有别的对话(Windows Terminal 是单窗口多标签, 关窗 =
-    关掉里面所有标签页)。
+    close_terminal=True 时, 进程收干净后再给终端窗口发一个 WM_CLOSE。两道闸都要过:
+      1. 调用方先确认这个终端窗口里没有别的对话(Windows Terminal 是单窗口多标签,
+         关窗 = 关掉里面所有标签页);
+      2. 这里再确认宿主是**纯终端**(config.CLOSABLE_TERMS)。VS Code 集成终端的宿主是
+         Code.exe, 那个窗口里还装着你的编辑器 —— 关掉对话可以, 关掉编辑器不行。
+         认不出来的宿主一律当作不能关。
     """
     if not pid:
         return {"ok": False, "why": "没有记录到进程"}
@@ -202,7 +206,13 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False, timeout=5.0):
 
     out = {"ok": True, "killed": len(gone) + len(alive), "children": len(kids)}
     if close_terminal and hwnd:
-        out["terminal_closed"] = close_window(hwnd)
+        host = (term_name or "").lower()
+        if host and host not in config.CLOSABLE_TERMS:
+            out["terminal_closed"] = False
+            out["term_kept"] = ("宿主是 %s, 不是纯终端 —— 只结束了对话, 窗口留着"
+                                % term_name)
+        else:
+            out["terminal_closed"] = close_window(hwnd)
     return out
 
 
