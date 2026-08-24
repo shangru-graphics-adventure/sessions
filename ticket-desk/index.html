@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ticket 台</title>
+<style>
+  :root{
+    --sky:#2ea8e6; --sky-soft:#e3f4fd; --sky-line:#a9dcf5;
+    --pink:#f2679a; --pink-soft:#fde8f0; --pink-line:#f7b8ce;
+    --bg:#fbfcfe; --surface:#fff; --chip:#f1f5f9; --border:#e2e8f0;
+    --text:#1f2933; --dim:#7c8896;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+    --sky:#5cc6ff; --sky-soft:rgba(92,198,255,.14); --sky-line:rgba(92,198,255,.4);
+    --pink:#ff8cb4; --pink-soft:rgba(255,140,180,.14); --pink-line:rgba(255,140,180,.4);
+    --bg:#10141a; --surface:#161c24; --chip:#1d242e; --border:#28313d;
+    --text:#e6ebf1; --dim:#8b97a6;
+  }}
+  *{box-sizing:border-box}
+  body{margin:0 auto;max-width:960px;background:var(--bg);color:var(--text);
+    font:13px/1.45 "Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    padding:20px 16px 60px}
+
+  header{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  h1{font-size:1.05rem;margin:0;font-weight:700;letter-spacing:-.01em}
+  h1 span{color:var(--sky)}
+  .meta{font-family:ui-monospace,Consolas,monospace;font-size:.7rem;color:var(--dim)}
+  .meta b{color:var(--sky)}
+  .tiny{font:inherit;font-size:.7rem;padding:2px 8px;border-radius:20px;cursor:pointer;
+    border:1px solid var(--border);background:var(--surface);color:var(--dim)}
+  .tiny:hover{border-color:var(--sky);color:var(--sky)}
+
+  h2{font-family:ui-monospace,Consolas,monospace;font-size:.65rem;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--pink);margin:18px 0 6px;font-weight:600;cursor:pointer}
+  h2 .n{color:var(--dim)}
+
+  form.add{display:flex;gap:5px;align-items:center;margin:0 0 10px}
+  input{font:inherit;font-size:.78rem;padding:5px 11px;border-radius:20px;border:1px solid var(--border);
+    background:var(--surface);color:var(--text)}
+  input:focus{outline:none;border-color:var(--sky)}
+  form.add input{flex:1}
+  form.add.sub{margin:4px 0 0}
+  form.add.sub input{font-size:.75rem;padding:3px 9px}
+
+  .rows{display:flex;flex-direction:column;gap:4px}
+  .row{display:flex;align-items:center;gap:7px;background:var(--surface);
+    border:1px solid var(--border);border-radius:8px;padding:5px 8px;min-height:34px}
+  .row.working{border-color:var(--sky-line);background:linear-gradient(90deg,var(--sky-soft),var(--surface) 55%)}
+  .row.paused{border-color:var(--pink-line)}
+  .row.done{opacity:.62}
+  .row.drop-before{box-shadow:0 -2px 0 -0px var(--sky)}
+  .row.drop-after{box-shadow:0 2px 0 -0px var(--sky)}
+  .row.dragging{opacity:.35}
+
+  .grip{color:#c3cbd4;cursor:grab;font-size:.75rem;line-height:1;flex:none;user-select:none;letter-spacing:-2px}
+  .grip:active{cursor:grabbing}
+  .dot{width:6px;height:6px;border-radius:50%;background:#c3cbd4;flex:none}
+  .row.working .dot{background:var(--sky);box-shadow:0 0 0 2.5px var(--sky-soft);animation:pulse 1.6s infinite}
+  .row.paused .dot{background:var(--pink)}
+  .row.done .dot{background:#9fb3a0}
+  @keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
+
+  .nm{font-weight:600;font-size:.82rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;cursor:text}
+  .row.done .nm{text-decoration:line-through;font-weight:500}
+  .nm input{width:100%;font-size:.82rem;font-weight:600;padding:2px 6px;border-radius:5px}
+
+  .clk{font-family:ui-monospace,Consolas,monospace;font-size:.76rem;flex:none;
+    background:var(--chip);border-radius:5px;padding:1px 6px}
+  .row.working .clk{color:var(--sky);background:var(--sky-soft)}
+  .own{font-family:ui-monospace,Consolas,monospace;font-size:.64rem;color:var(--dim);flex:none}
+  .when{font-family:ui-monospace,Consolas,monospace;font-size:.64rem;color:var(--dim);flex:none;
+    white-space:nowrap}
+  .when .hl{color:var(--pink)}
+
+  .acts{display:flex;gap:3px;flex:none}
+  .b{font:inherit;font-size:.68rem;line-height:1;padding:4px 6px;border-radius:5px;cursor:pointer;
+    border:1px solid var(--border);background:var(--chip);color:var(--dim);white-space:nowrap;transition:.12s}
+  .b:hover{border-color:var(--sky);color:var(--sky);background:var(--sky-soft)}
+  .b.go{border-color:var(--sky-line);color:var(--sky);background:var(--sky-soft);font-weight:600}
+  .b.warn:hover,.b.danger:hover{border-color:var(--pink);color:var(--pink);background:var(--pink-soft)}
+  .b.danger.arm{border-color:var(--pink);color:#fff;background:var(--pink)}
+  .row .acts .b.ghost{opacity:0}
+  .row:hover .acts .b.ghost{opacity:1}
+
+  .kid{position:relative;padding-left:20px}
+  .kid::before{content:"";position:absolute;left:8px;top:-2px;bottom:0;width:1px;background:var(--border)}
+  .empty{color:var(--dim);font-size:.75rem;padding:10px 2px}
+  .msg{font-family:ui-monospace,Consolas,monospace;font-size:.7rem;color:var(--pink);min-height:1em;margin:4px 0}
+
+  /* 计划时间：滚轮选择器（iOS 闹钟那种），纯参考，不参与计时 */
+  .plan{font-family:ui-monospace,Consolas,monospace;font-size:.64rem;flex:none;white-space:nowrap;
+    background:var(--chip);border:1px solid var(--border);border-radius:5px;padding:1px 5px;
+    color:var(--dim);cursor:pointer}
+  .plan:hover{border-color:var(--sky);color:var(--sky)}
+  .plan.over{border-color:var(--pink-line);background:var(--pink-soft);color:var(--pink)}
+  #planner{position:absolute;z-index:50;background:var(--surface);border:1px solid var(--sky-line);
+    border-radius:10px;padding:10px 11px;box-shadow:0 8px 26px rgba(0,0,0,.16);width:296px}
+  #planner .ln{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+  #planner .lb{font-size:.75rem;font-weight:600;cursor:pointer;user-select:none}
+  #planner .lb:hover{color:var(--sky)}
+  #planner input[type=checkbox]{accent-color:var(--sky);width:13px;height:13px;margin:0}
+  #planner .hint{font-size:.64rem;color:var(--dim);margin-left:auto;font-family:ui-monospace,Consolas,monospace}
+  .pk{display:flex;gap:4px;position:relative;margin:0 0 9px;padding:0 2px;
+    border:1px solid var(--border);border-radius:8px;background:var(--bg)}
+  .pk.off{opacity:.32;pointer-events:none;filter:grayscale(1)}
+  .pk .bar{position:absolute;left:3px;right:3px;top:53px;height:26px;border-radius:5px;
+    background:var(--sky-soft);border-top:1px solid var(--sky-line);border-bottom:1px solid var(--sky-line);
+    pointer-events:none}
+  .wheel:first-of-type{flex:1.5}
+  .wheel{height:132px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;text-align:center;
+    -webkit-overflow-scrolling:touch;flex:1;position:relative;z-index:1}
+  .wheel::-webkit-scrollbar{display:none}
+  .wheel .it{height:26px;line-height:26px;scroll-snap-align:center;font-size:.76rem;color:var(--dim);
+    font-family:ui-monospace,Consolas,monospace;white-space:nowrap;cursor:pointer}
+  .wheel .it.on{color:var(--sky);font-weight:700;font-size:.8rem}
+  .wheel .pad{height:53px}
+  #planner .foot{display:flex;gap:5px;justify-content:flex-end;align-items:center}
+  #planner .foot .note{margin-right:auto;font-size:.62rem;color:var(--dim)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Ticket <span>台</span></h1>
+  <span class="meta" id="stat">–</span>
+  <button class="tiny" id="btn-refresh">刷新</button>
+</header>
+
+<form class="add" id="add">
+  <input name="title" placeholder="新 ticket … 回车创建（记下达时刻）" autocomplete="off">
+  <button class="b" id="btn-plan" type="button" title="计划开始/结束时间（只作参考，不影响计时）">📅</button>
+  <button class="b go" type="submit">＋ 建</button>
+</form>
+<div class="msg" id="msg"></div>
+
+<div id="live"></div>
+
+<h2 id="arc-head" class="hidden"><span id="arc-caret">▸</span> 已归档 <span class="n" id="arc-n"></span></h2>
+<div id="arc" class="hidden"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let T = [];              // 全部 ticket
+let SKEW = 0;            // 服务器时间 - 本地时间（秒）
+let armDel = null;       // 删除二次确认
+let arcOpen = false;
+let editing = null;
+let addingUnder = null;   // 正在其下新建子 ticket 的父 id
+
+const now = () => Date.now() / 1000 + SKEW;
+
+/* ---------- 时间口径：区间并集 ----------------------------------------
+   一个 ticket 的 sessions 是运行区间 [start, end|null]。子树耗时 = 子树内
+   全部区间的【并集】长度 —— 并集是集合测度，两个子 ticket 同时在跑、或父
+   与子同时在跑，重叠的那段只会被算一次。                                 */
+function unionSec(ivs, t){
+  const a = ivs.map(([s,e]) => [s, e == null ? t : e]).filter(([s,e]) => e > s)
+               .sort((x,y) => x[0]-y[0]);
+  let total = 0, cs = null, ce = null;
+  for(const [s,e] of a){
+    if(cs === null){ cs = s; ce = e; }
+    else if(s <= ce){ if(e > ce) ce = e; }
+    else { total += ce - cs; cs = s; ce = e; }
+  }
+  if(cs !== null) total += ce - cs;
+  return total;
+}
+const kidsOf = id => T.filter(t => t.parent === id);
+function subtree(id){
+  const out = [byId(id)];
+  for(const k of kidsOf(id)) out.push(...subtree(k.id));
+  return out;
+}
+const byId = id => T.find(t => t.id === id);
+const ownSec = (t, n) => unionSec(t.sessions, n);
+const treeSec = (t, n) => unionSec(subtree(t.id).flatMap(x => x.sessions), n);
+const treeWorking = t => subtree(t.id).some(x => x.status === 'working');
+
+function fmt(sec){
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  const p = v => String(v).padStart(2,'0');
+  return h ? `${h}:${p(m)}:${p(s)}` : `${m}:${p(s)}`;
+}
+function stamp(ts){
+  // 一律带日期（跨年再补年份），别让"昨天 15:42"和"今天 15:42"看起来一样
+  if(!ts) return '';
+  const d = new Date(ts*1000), p = v => String(v).padStart(2,'0');
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  const md = `${d.getMonth()+1}/${p(d.getDate())}`;
+  const y = d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + '/';
+  return `${y}${md} ${hm}`;
+}
+const lastEnd = t => { const e = t.sessions.map(s => s[1]).filter(Boolean); return e.length ? Math.max(...e) : null; };
+
+/* ---------- 数据 ---------- */
+async function api(path, body){
+  const r = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'},
+                                      body: JSON.stringify(body)} : {});
+  const j = await r.json();
+  if(j.tickets){ T = j.tickets; SKEW = j.now - Date.now()/1000; }
+  $('#msg').textContent = j.ok === false ? (j.msg || '出错了') : '';
+  if(j.tickets) render();
+  return j;
+}
+const act = (id, action) => api('/api/action', {id, action});
+
+/* ---------- 渲染 ---------- */
+function render(){
+  const live = T.filter(t => !t.archived);
+  const arch = T.filter(t => t.archived);
+  paint($('#live'), live, null, live.length ? '' : '还没有 ticket，上面输入标题回车即可。');
+  const roots = arch.filter(t => !t.parent || !byId(t.parent) || !byId(t.parent).archived);
+  $('#arc-head').classList.toggle('hidden', !arch.length);
+  $('#arc').classList.toggle('hidden', !arch.length || !arcOpen);
+  $('#arc-n').textContent = arch.length ? `(${roots.length} 树 / ${arch.length} 条)` : '';
+  $('#arc-caret').textContent = arcOpen ? '▾' : '▸';
+  if(arcOpen) paint($('#arc'), arch, null, '');
+
+  const n = now();
+  const working = live.filter(t => t.status === 'working').length;
+  const open = live.filter(t => t.status !== 'done').length;
+  const d0 = new Date(); d0.setHours(0,0,0,0);
+  const todaySec = unionSec(T.flatMap(t => t.sessions).map(([s,e]) => [Math.max(s, d0/1000), e]), n);
+  $('#stat').innerHTML = `在跑 <b>${working}</b> · 未完成 ${open} · 今日 ${fmt(todaySec)}`;
+  $('#btn-plan').textContent = draftLabel();
+  if(addingUnder){ const i = document.querySelector('form.sub input'); if(i) i.focus(); }
+  tick();
+}
+
+function paint(host, pool, parent, emptyText){
+  host.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'rows';
+  const inPool = id => pool.some(p => p.id === id);
+  const list = pool.filter(t => (t.parent || null) === parent
+    || (parent === null && t.parent && !inPool(t.parent)));   // 父不在本池 → 当顶层，别让它隐身
+  if(!list.length && emptyText){
+    box.innerHTML = `<div class="empty">${emptyText}</div>`;
+  }
+  for(const t of list){
+    box.appendChild(rowEl(t, pool));
+    const kids = pool.filter(x => x.parent === t.id);
+    if(kids.length || addingUnder === t.id){
+      const wrap = document.createElement('div');
+      wrap.className = 'kid';
+      paint(wrap, pool, t.id, '');
+      if(addingUnder === t.id) wrap.appendChild(childForm(t.id));
+      box.appendChild(wrap);
+    }
+  }
+  host.appendChild(box);
+}
+
+function rowEl(t, pool){
+  const n = now();
+  const kids = pool.filter(x => x.parent === t.id);
+  const own = ownSec(t, n), tree = treeSec(t, n);
+  const el = document.createElement('div');
+  el.className = 'row ' + t.status;
+  el.dataset.id = t.id;
+  el.draggable = true;
+
+  const running = t.status === 'working' || treeWorking(t);
+  let when = `下达 ${stamp(t.created)}`;
+  if(t.status === 'done')        when += ` · <span class="hl">完成于 ${stamp(t.doneAt)}</span>`;
+  else if(t.status === 'paused') when += ` · <span class="hl">暂停于 ${stamp(t.pausedAt || lastEnd(t))}</span>`;
+  else if(t.status === 'working')when += ` · 本轮 ${fmt(n - t.sessions[t.sessions.length-1][0])}`;
+
+  el.innerHTML = `
+    <span class="grip" title="拖动改变同层顺序">⣿</span>
+    <span class="dot"></span>
+    <span class="nm" title="${t.note ? esc(t.note) + ' — ' : ''}双击改名">${esc(t.title)}</span>
+    <span class="clk" data-clk="${t.id}" title="${kids.length ? '含子 ticket（重叠只计一份）' : '累计工作时长'}">${fmt(tree)}</span>
+    ${kids.length ? `<span class="own" data-own="${t.id}" title="本 ticket 自身">自 ${fmt(own)}</span>` : ''}
+    ${planBadge(t, n)}
+    <span class="when" data-when="${t.id}">${when}</span>
+    <span class="acts"></span>`;
+  el.dataset.running = running ? '1' : '';
+
+  const acts = el.querySelector('.acts');
+  const btn = (label, cls, title, fn) => {
+    const b = document.createElement('button');
+    b.className = 'b ' + cls; b.textContent = label; b.title = title;
+    b.onclick = e => { e.stopPropagation(); fn(); };
+    acts.appendChild(b); return b;
+  };
+
+  if(t.archived){
+    btn('取出', '', '取消归档', () => act(t.id, 'unarchive'));
+  } else {
+    if(t.status === 'working') btn('⏸ 暂停', 'warn', '暂停计时', () => act(t.id, 'pause'));
+    else if(t.status !== 'done') btn('▶ 开始', 'go', '开始 / 继续计时', () => act(t.id, 'start'));
+    if(t.status === 'done'){
+      btn('↩ 未完成', '', '退回未完成', () => act(t.id, 'undone'));
+      btn('归档', 'ghost', '归档（连同子 ticket）', () => act(t.id, 'archive'));
+    } else {
+      btn('✓ 完成', '', '标记完成', () => act(t.id, 'done'));
+    }
+    btn('＋子', 'ghost', '新建子 ticket', () => addChild(t.id));
+    btn('⇥', 'ghost', '降为上一个同层 ticket 的子级', () => indent(t, pool));
+    if(t.parent) btn('⇤', 'ghost', '升一层', () => api('/api/reparent', {id: t.id, parent: byId(t.parent).parent || null}));
+  }
+  const del = btn('✕', 'danger ghost', '删除（连同子 ticket）', () => {
+    if(armDel === t.id){ armDel = null; api('/api/delete', {id: t.id}); }
+    else { armDel = t.id; del.classList.add('arm'); del.textContent = '确认删?'; }
+  });
+  if(armDel === t.id){ del.classList.add('arm'); del.textContent = '确认删?'; }
+
+  const pb = el.querySelector('.plan');
+  if(pb) pb.onclick = e => { e.stopPropagation(); openPlanner(pb, t); };
+  else if(!t.archived) btn('📅', 'ghost', '设定计划开始/结束时间（只作参考，不影响计时）',
+                           () => openPlanner(el.querySelector('.acts'), t));
+  el.querySelector('.nm').ondblclick = () => startEdit(el, t);
+  wireDrag(el, t);
+  return el;
+}
+
+function esc(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---------- 计划时间（滚轮选择器）--------------------------------------
+   planStart / planEnd 是纯参考值：不进 sessions，不影响任何计时与统计。
+   勾选才生效，两个可以只设一个、也可以都设。默认停在"下一个整点"。      */
+let planDraft = {planStart: null, planEnd: null};   // 新建流程暂存
+let planner = null;
+
+const DAYS = (() => {
+  const base = new Date(); base.setHours(0,0,0,0);
+  const out = [];
+  for(let i = -7; i <= 365; i++){
+    const d = new Date(base.getTime() + i*86400000);
+    const w = '日一二三四五六'[d.getDay()];
+    const tag = i === 0 ? '今天' : i === 1 ? '明天' : i === -1 ? '昨天' : '';
+    const md = `${d.getMonth()+1}/${String(d.getDate()).padStart(2,'0')}`;
+    out.push({ts: d.getTime()/1000, label: tag ? `${tag} ${md}` : `${md} 周${w}`});
+  }
+  return out;
+})();
+const HOURS = Array.from({length:24}, (_,i) => String(i).padStart(2,'0') + ' 时');
+const MINS  = Array.from({length:60}, (_,i) => String(i).padStart(2,'0') + ' 分');
+
+function nextHour(){                       // 默认值 = 现在所在的下一个整点
+  const d = new Date(); d.setMinutes(0,0,0); d.setHours(d.getHours()+1);
+  return d.getTime()/1000;
+}
+function splitTs(ts){
+  const d = new Date(ts*1000), day = new Date(d); day.setHours(0,0,0,0);
+  let di = DAYS.findIndex(x => Math.abs(x.ts - day.getTime()/1000) < 1);
+  if(di < 0) di = 7;                       // 落在列表外的老计划，退回今天
+  return {d: di, h: d.getHours(), m: d.getMinutes()};
+}
+const joinTs = sel => DAYS[sel.d].ts + sel.h*3600 + sel.m*60;
+const sameDay = (a,b) => new Date(a*1000).toDateString() === new Date(b*1000).toDateString();
+function planText(ts){
+  const d = new Date(ts*1000), p = v => String(v).padStart(2,'0');
+  return `${d.getMonth()+1}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function planBadge(t, n){
+  const a = t.planStart, b = t.planEnd;
+  if(!a && !b) return '';
+  const txt = a && b ? `${planText(a)} → ${sameDay(a,b) ? planText(b).slice(-5) : planText(b)}`
+            : a ? `${planText(a)} 起` : `${planText(b)} 前`;
+  const over = b && b < n && t.status !== 'done';       // 过了计划结束还没完成
+  return `<span class="plan${over ? ' over' : ''}" title="计划时间（只作参考，不影响计时）">📅 ${txt}</span>`;
+}
+function draftLabel(){
+  const {planStart:a, planEnd:b} = planDraft;
+  if(!a && !b) return '📅';
+  return '📅 ' + (a && b ? `${planText(a)}→${sameDay(a,b) ? planText(b).slice(-5) : planText(b)}`
+                 : a ? `${planText(a)}起` : `${planText(b)}前`);
+}
+
+const ITEM = 26;   // 与 CSS 里 .wheel .it 的高度一致，改一处必须改两处
+function makeWheel(items, idx, onPick){
+  const w = document.createElement('div');
+  w.className = 'wheel';
+  w.innerHTML = '<div class="pad"></div>'
+              + items.map(x => `<div class="it">${x}</div>`).join('')
+              + '<div class="pad"></div>';
+  const its = () => [...w.querySelectorAll('.it')];
+  const mark = () => {
+    const i = Math.max(0, Math.min(items.length-1, Math.round(w.scrollTop/ITEM)));
+    its().forEach((e,k) => e.classList.toggle('on', k === i));
+    return i;
+  };
+  let tid = null;
+  w.onscroll = () => {                    // 滚停 110ms 后吸附到格子上并回报
+    const i = mark();
+    clearTimeout(tid);
+    tid = setTimeout(() => { w.scrollTop = i*ITEM; onPick(i); }, 110);
+  };
+  w.onclick = e => {                      // 点某一项也能选（不想滑的时候）
+    const it = e.target.closest('.it'); if(!it) return;
+    const i = its().indexOf(it); w.scrollTop = i*ITEM; mark(); onPick(i);
+  };
+  w._set = i => { w.scrollTop = i*ITEM; mark(); };
+  return w;
+}
+
+function closePlanner(){ if(planner){ planner.remove(); planner = null; } }
+
+function openPlanner(anchor, ticket){
+  closePlanner();
+  const cur = ticket ? {planStart: ticket.planStart || null, planEnd: ticket.planEnd || null} : planDraft;
+  const G = {
+    planStart: {on: !!cur.planStart, sel: splitTs(cur.planStart || nextHour())},
+    planEnd:   {on: !!cur.planEnd,   sel: splitTs(cur.planEnd   || nextHour())},
+  };
+
+  const box = document.createElement('div');
+  box.id = 'planner';
+  box.innerHTML = `<div class="foot" style="margin-bottom:7px">
+      <span class="note" style="margin:0">计划时间只作参考，不影响计时</span></div>`;
+  const wheels = {};
+
+  for(const [key, label] of [['planStart','计划开始'], ['planEnd','计划结束']]){
+    const g = G[key];
+    const ln = document.createElement('div');
+    ln.className = 'ln';
+    // checkbox 不套在 <label> 里：label 转发点击会在某些环境下双触发，净效果等于没点
+    ln.innerHTML = `<input type="checkbox"${g.on ? ' checked' : ''}>
+                    <span class="lb">${label}</span><span class="hint"></span>`;
+    const pk = document.createElement('div');
+    pk.className = 'pk' + (g.on ? '' : ' off');
+    const bar = document.createElement('div'); bar.className = 'bar';
+    const hint = ln.querySelector('.hint');
+    const show = () => { hint.textContent = g.on ? planText(joinTs(g.sel)) : '未设定'; };
+    const wd = makeWheel(DAYS.map(x => x.label), g.sel.d, i => { g.sel.d = i; show(); });
+    const wh = makeWheel(HOURS, g.sel.h, i => { g.sel.h = i; show(); });
+    const wm = makeWheel(MINS,  g.sel.m, i => { g.sel.m = i; show(); });
+    pk.append(bar, wd, wh, wm);
+    wheels[key] = [wd, wh, wm];
+    const cb = ln.querySelector('input');
+    const apply = () => { g.on = cb.checked; pk.classList.toggle('off', !g.on); show(); };
+    cb.onchange = apply;
+    ln.querySelector('.lb').onclick = () => { cb.checked = !cb.checked; apply(); };
+    show();
+    box.append(ln, pk);
+  }
+
+  const foot = document.createElement('div');
+  foot.className = 'foot';
+  foot.innerHTML = `<button class="b" data-clear>清空</button>
+                    <button class="b" data-cancel>取消</button>
+                    <button class="b go" data-ok>确定</button>`;
+  box.append(foot);
+
+  const commit = val => {
+    if(ticket) api('/api/edit', {id: ticket.id, ...val});
+    else { planDraft = val; render(); }
+    closePlanner();
+  };
+  foot.querySelector('[data-clear]').onclick  = () => commit({planStart: null, planEnd: null});
+  foot.querySelector('[data-cancel]').onclick = closePlanner;
+  foot.querySelector('[data-ok]').onclick = () => {
+    const val = {planStart: G.planStart.on ? joinTs(G.planStart.sel) : null,
+                 planEnd:   G.planEnd.on   ? joinTs(G.planEnd.sel)   : null};
+    commit(val);
+    // 只是提醒，不拦：计划时间是参考值，用户想这么写就这么写
+    if(val.planStart && val.planEnd && val.planEnd < val.planStart)
+      $('#msg').textContent = '注意：计划结束早于计划开始（已按你填的存下）';
+  };
+
+  document.body.appendChild(box);
+  const r = anchor.getBoundingClientRect();
+  const top = r.bottom + scrollY + 5;
+  box.style.top  = top + 'px';
+  box.style.left = Math.max(8, Math.min(r.left + scrollX, scrollX + innerWidth - box.offsetWidth - 12)) + 'px';
+  planner = box;
+  // 滚轮要挂进 DOM、有了布局才能定位到初值
+  requestAnimationFrame(() => {
+    for(const key of ['planStart','planEnd']){
+      const g = G[key], [wd, wh, wm] = wheels[key];
+      wd._set(g.sel.d); wh._set(g.sel.h); wm._set(g.sel.m);
+    }
+  });
+}
+document.addEventListener('mousedown', e => {
+  if(planner && !e.target.closest('#planner') && !e.target.closest('.plan') && e.target.id !== 'btn-plan')
+    closePlanner();
+});
+
+/* ---------- 秒表：每秒只改文本，不重绘 DOM ---------- */
+function tick(){
+  const n = now();
+  for(const el of document.querySelectorAll('.row')){
+    const t = byId(el.dataset.id);
+    if(!t || !el.dataset.running) continue;
+    el.querySelector(`[data-clk="${t.id}"]`).textContent = fmt(treeSec(t, n));
+    const own = el.querySelector(`[data-own="${t.id}"]`);
+    if(own) own.textContent = '自 ' + fmt(ownSec(t, n));
+    if(t.status === 'working'){
+      el.querySelector(`[data-when="${t.id}"]`).innerHTML =
+        `下达 ${stamp(t.created)} · 本轮 ${fmt(n - t.sessions[t.sessions.length-1][0])}`;
+    }
+  }
+}
+setInterval(tick, 1000);
+
+/* ---------- 编辑 / 新建 / 层级 ---------- */
+function startEdit(el, t){
+  if(editing) return;
+  editing = t.id;
+  const cell = el.querySelector('.nm');
+  cell.innerHTML = '<input>';
+  const inp = cell.querySelector('input');
+  inp.value = t.title; inp.focus(); inp.select();
+  const done = ok => {
+    if(editing !== t.id) return;
+    editing = null;
+    if(ok && inp.value.trim() && inp.value.trim() !== t.title) api('/api/edit', {id: t.id, title: inp.value});
+    else render();
+  };
+  inp.onblur = () => done(true);
+  inp.onkeydown = e => {
+    if(e.key === 'Enter'){ e.preventDefault(); done(true); }
+    if(e.key === 'Escape'){ e.preventDefault(); done(false); }
+  };
+}
+
+function addChild(pid){ addingUnder = pid; render(); }
+
+function childForm(pid){
+  // 内联新建行（不用 window.prompt：模态框会卡住页面，也不好看）
+  const f = document.createElement('form');
+  f.className = 'add sub';
+  f.innerHTML = '<input placeholder="子 ticket 标题 … 回车创建，Esc 关闭" autocomplete="off">'
+              + '<button class="b" type="button" data-plan>' + draftLabel() + '</button>'
+              + '<button class="b go" type="submit">＋</button>'
+              + '<button class="b" type="button" data-x>✕</button>';
+  const inp = f.querySelector('input');
+  const pbtn = f.querySelector('[data-plan]');
+  pbtn.onclick = () => openPlanner(pbtn, null);
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const v = inp.value.trim();
+    if(!v) return;
+    inp.value = '';
+    const plan = planDraft; planDraft = {planStart: null, planEnd: null};
+    await api('/api/create', {title: v, parent: pid, ...plan});   // 保持打开，方便连着敲
+  };
+  f.querySelector('[data-x]').onclick = () => { addingUnder = null; render(); };
+  inp.onkeydown = e => { if(e.key === 'Escape'){ addingUnder = null; render(); } };
+  return f;   // 聚焦交给 render() 末尾统一做（挂进 DOM 之后才聚得上）
+}
+
+function indent(t, pool){
+  const sibs = pool.filter(x => (x.parent || null) === (t.parent || null));
+  const i = sibs.findIndex(x => x.id === t.id);
+  if(i <= 0){ $('#msg').textContent = '上面没有同层 ticket 可挂靠'; return; }
+  api('/api/reparent', {id: t.id, parent: sibs[i-1].id});
+}
+
+$('#add').onsubmit = async e => {
+  e.preventDefault();
+  const inp = e.target.querySelector('input[name=title]');
+  if(!inp.value.trim()) return;
+  const v = inp.value; inp.value = '';
+  const plan = planDraft; planDraft = {planStart: null, planEnd: null};
+  await api('/api/create', {title: v, ...plan});
+};
+$('#btn-plan').onclick = () => openPlanner($('#btn-plan'), null);
+$('#btn-refresh').onclick = () => api('/api/state');
+$('#arc-head').onclick = () => { arcOpen = !arcOpen; render(); };
+
+/* ---------- 拖动排序（同层） ---------- */
+let dragId = null;
+function wireDrag(el, t){
+  el.ondragstart = e => {
+    dragId = t.id; el.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', t.id);
+  };
+  el.ondragend = () => { dragId = null; el.classList.remove('dragging'); clearMarks(); };
+  el.ondragover = e => {
+    const d = byId(dragId);
+    if(!d || d.id === t.id || (d.parent || null) !== (t.parent || null)) return;
+    e.preventDefault();
+    clearMarks();
+    const after = e.offsetY > el.offsetHeight / 2;
+    el.classList.add(after ? 'drop-after' : 'drop-before');
+  };
+  el.ondragleave = () => el.classList.remove('drop-before', 'drop-after');
+  el.ondrop = async e => {
+    e.preventDefault();
+    const d = byId(dragId);
+    clearMarks();
+    if(!d || d.id === t.id || (d.parent || null) !== (t.parent || null)) return;
+    const after = e.offsetY > el.offsetHeight / 2;
+    let before = t.id;
+    if(after){
+      const sibs = T.filter(x => !x.archived === !d.archived && (x.parent || null) === (t.parent || null));
+      const i = sibs.findIndex(x => x.id === t.id);
+      const nxt = sibs.slice(i+1).find(x => x.id !== d.id);
+      before = nxt ? nxt.id : null;
+    }
+    await api('/api/move', {id: d.id, before});
+  };
+}
+const clearMarks = () => document.querySelectorAll('.drop-before,.drop-after')
+  .forEach(x => x.classList.remove('drop-before','drop-after'));
+
+document.addEventListener('click', e => {
+  if(armDel && !e.target.closest('.b.danger')){ armDel = null; render(); }
+});
+
+api('/api/state');
+setInterval(() => { if(!editing && !dragId && !planner) api('/api/state'); }, 20000);  // 多标签页同步
+</script>
+</body>
+</html>
