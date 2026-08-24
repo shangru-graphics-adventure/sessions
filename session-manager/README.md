@@ -395,6 +395,11 @@ hook:    shell pid=45848 powershell.exe  (claude 的父进程)
 - `✕ 连标签页` 改走 `Terminal.dispose()` —— VS Code 自己的关法, 标签干干净净消失,
   不会留下"terminal process terminated with exit code"那条提示(杀 shell 的兜底做法会)
 
+`shell_pid` 与 `hwnd` 都有**现场兜底**: hook 没记(老的 state 文件里就没有)时,
+server 会当场查一次 claude 的父进程 / 沿父链找窗口。没有这个兜底, 升级之后每个还开着
+的对话都得先说一句话让 hook 补记才能用 —— 太别扭了。查一次就缓存, 一个进程的父不会
+中途换人。
+
 **没装完全不影响别的功能**: `actions.bridge()` 连不上就返回 None, 一切退回原来的行为。
 超时 1.2 秒且总额有上限 —— 这是"有更好就用"的增强, 不能因为它让页面卡住。
 

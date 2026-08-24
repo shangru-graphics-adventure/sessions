@@ -531,6 +531,31 @@ def rec_procs(rec):
     return []
 
 
+_shell_cache = {}               # claude pid -> (shell_pid, shell_name); 父进程不会变
+
+
+def shell_of(pid):
+    """这个 claude 进程的父 shell。**hook 没记的时候现场查一次。**
+
+    为什么要兜底: `shell_pid` 是后来才加进 hook 的, 老的 state 文件里没有; 而它正是
+    VS Code 桥认终端用的那个 pid(`Terminal.processId`)。不兜底的话, 升级之后每个
+    还开着的对话都得先说一句话让 hook 补记, 才能精确切到标签页 —— 太别扭了。
+    查一次就缓存: 一个进程的父不会中途换人。
+    """
+    if pid in _shell_cache:
+        return _shell_cache[pid]
+    out = (None, "")
+    try:
+        import psutil
+        par = psutil.Process(pid).parent()
+        if par:
+            out = (par.pid, par.name())
+    except Exception:
+        pass
+    _shell_cache[pid] = out
+    return out
+
+
 def live_windows(rec, alive):
     """此刻**真的还开着**的那几个窗口。
 
@@ -545,6 +570,9 @@ def live_windows(rec, alive):
             continue
         if ct is not None and abs(alive[pid] - ct) >= 2.0:
             continue                              # pid 被回收给了别的进程
+        sp, sn = e.get("shell_pid"), e.get("shell_name")
+        if not sp:
+            sp, sn = shell_of(pid)
         out.append({
             "pid": pid,
             "hwnd": e.get("hwnd"),
@@ -556,8 +584,8 @@ def live_windows(rec, alive):
             "owner": e.get("win_owner") or "",
             # 承载这个对话的 shell。VS Code 里它 == 扩展 API 的 Terminal.processId,
             # 有它才能精确点到具体哪个终端标签页。
-            "shell_pid": e.get("shell_pid"),
-            "shell": e.get("shell_name") or "",
+            "shell_pid": sp,
+            "shell": sn or "",
             "ts": e.get("ts"),
         })
     return out
@@ -912,9 +940,18 @@ def focus_win(w):
         if via:
             return {"ok": False, "win": w, "how": "vscode-bridge",
                     "why": via.get("why") or "桥说它找不到这个终端"}
-    r = actions.focus_window(w.get("hwnd"))
+    hwnd = w.get("hwnd")
+    if not hwnd and w.get("term_pid"):
+        # 同样是兜底: 老 state 里没有句柄(那时的 capture_window 还不会沿父链找),
+        # 现场按当前的规则再找一次, 免得升级后非得等 hook 重记一遍
+        try:
+            import hook_state
+            hwnd = (hook_state.capture_window(w["term_pid"]) or {}).get("hwnd")
+        except Exception:
+            hwnd = None
+    r = actions.focus_window(hwnd)
     r["win"] = w
-    if not w.get("hwnd"):
+    if not hwnd:
         r["why"] = "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]
     elif r.get("ok") and host == "code.exe":
         r["why"] = ("切到了 VS Code 窗口, 但到不了具体哪个标签页 —— "
