@@ -1,0 +1,41 @@
+{
+  "name": "claude-sessions-bridge",
+  "displayName": "Claude Sessions Bridge",
+  "description": "Lets the local Claude session manager focus or close a specific VS Code terminal tab by its shell process id.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Claude Sessions Bridge",
+      "properties": {
+        "claudeSessionsBridge.port": {
+          "type": "number",
+          "default": 8721,
+          "description": "本地端口, 只绑 127.0.0.1。对话管理器按这个端口找它。"
+        },
+        "claudeSessionsBridge.portSpan": {
+          "type": "number",
+          "default": 8,
+          "description": "从上面那个端口起, 最多往后试几个 —— 每个 VS Code 窗口占一个。"
+        },
+        "claudeSessionsBridge.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "关掉就不再监听端口。"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "claudeSessionsBridge.status",
+        "title": "Claude Sessions Bridge: 看看现在监听在哪、有哪些终端"
+      }
+    ]
+  }
+}

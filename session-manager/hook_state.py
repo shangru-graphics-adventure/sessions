@@ -49,7 +49,8 @@ def find_owner():
     SessionEnd hook 在窗口被直接关掉时基本不触发(实测 2299 个会话里只有 148 个有记录),
     所以存活判定只能靠进程本身。
     """
-    out = {"pid": None, "pid_ctime": None, "term_pid": None, "term_name": None}
+    out = {"pid": None, "pid_ctime": None, "term_pid": None, "term_name": None,
+           "shell_pid": None, "shell_name": None}
     try:
         import psutil
     except Exception:
@@ -69,6 +70,12 @@ def find_owner():
                 out["pid_ctime"] = round(p.create_time(), 3)
                 seen_claude = True
                 continue
+            if seen_claude and out["shell_pid"] is None:
+                # claude 正上方那一层就是承载它的 shell。VS Code 里这个 pid 正好等于
+                # 扩展 API 的 `Terminal.processId`, 于是能精确点到那个终端标签页
+                # (见 vscode-bridge/)。在 Windows Terminal 里它是那个标签的 cmd.exe。
+                out["shell_pid"] = p.pid
+                out["shell_name"] = name
             if seen_claude and name in TERMS and name != "powershell.exe":
                 out["term_pid"] = p.pid
                 out["term_name"] = name
@@ -182,7 +189,8 @@ def merge_proc(rec, info):
         procs = []
         if rec.get("pid"):
             procs.append({k: rec.get(k) for k in
-                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
+                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
+                          "shell_pid", "shell_name")})
     now = time.time()
     for e in procs:
         if e.get("pid") == pid:
@@ -290,7 +298,8 @@ def main():
         rec.update(find_owner())
         rec.update(capture_window(rec.get("term_pid")))
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
+                          "shell_pid", "shell_name")})
     elif event == "SessionStart":
         # 会话刚起来(启动 / --resume / /clear) —— 这是"又多开了一个窗口"的唯一
         # 早期信号: 用户还没说话, 别的事件都不会触发。没有它, 一个刚 resume 出来
@@ -300,7 +309,8 @@ def main():
         rec.update(find_owner())
         rec.update(capture_window(rec.get("term_pid")))
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
+                          "shell_pid", "shell_name")})
     elif event == "Stop":
         rec["state"] = "done"
         rec["note"] = ""
@@ -314,7 +324,8 @@ def main():
         if w.get("hwnd"):
             rec["hwnd"] = w["hwnd"]
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
+                          "shell_pid", "shell_name")})
     elif event == "Notification":
         # Claude 需要你的注意: 权限确认、选择、长时间空闲
         rec["state"] = "waiting"
@@ -322,7 +333,8 @@ def main():
         if not rec.get("pid"):
             rec.update(find_owner())
         merge_proc(rec, {k: rec.get(k) for k in
-                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner")})
+                         ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
+                          "shell_pid", "shell_name")})
     elif event == "SessionEnd":
         rec["state"] = "closed"
         rec["reason"] = clean(data.get("reason") or "", 40)
