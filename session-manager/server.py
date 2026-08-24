@@ -949,11 +949,34 @@ def focus_win(w):
         if via:
             return {"ok": False, "win": w, "how": "vscode-bridge",
                     "why": via.get("why") or "桥说它找不到这个终端"}
+    if not hwnd:
+        return {"ok": False, "win": w,
+                "why": "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]}
+    if (w.get("term") or "").lower() == "windowsterminal.exe":
+        # WT 单窗口多标签共用一个 HWND: 光提前台, 活动的还是原来那个标签(你若有
+        # 六个对话开在同一个窗口里, 六个"切过去"会全落在同一个标签上)。所以提前台
+        # 之后按记下的标签标题轮 Ctrl+Tab 找到它。
+        r = actions.focus_wt_tab(hwnd, w.get("title"))
+        r["win"] = w
+        if r.get("tab"):
+            # 标题是唯一的定位手段, 所以**重名标签分不开** —— 同一窗口里有别的对话
+            # 顶着同一个标题时(把同一对话开两份就会这样), 轮转会停在先遇到的那个。
+            # 分不清就说分不清, 别装作精确。
+            core = actions._title_core(w.get("title"))
+            dups = 0
+            states = load_states()
+            alive = alive_pids(all_pids(states))
+            for sid2, rec2 in states.items():
+                for w2 in live_windows(rec2, alive):
+                    if w2.get("hwnd") == hwnd and w2.get("pid") != w.get("pid")                             and actions._title_core(w2.get("title")) == core:
+                        dups += 1
+            if dups:
+                r["why"] = ("这个窗口里还有 %d 个标签顶着同样的标题, 可能停在了别的"
+                            "同名对话上 — 标题是唯一的定位手段, 重名分不开" % dups)
+        return r
     r = actions.focus_window(hwnd)
     r["win"] = w
-    if not hwnd:
-        r["why"] = "没记到窗口句柄(pid %s) — 请自己切过去" % w["pid"]
-    elif r.get("ok") and host == "code.exe":
+    if r.get("ok") and host == "code.exe":
         r["why"] = ("切到了 VS Code 窗口, 但到不了具体哪个标签页 —— "
                     "装上 vscode-bridge 扩展就能精确点到")
     return r
