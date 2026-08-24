@@ -393,6 +393,10 @@ function winsHtml(s){
     + `<button class="danger" data-act="close" data-pid="${x.pid}" title="${pure
         ? "结束这个对话的进程(连同它派生的子进程); 该终端窗口里没有别的对话时, 窗口也一并关掉"
         : "只结束这个对话的进程 — 宿主是 " + esc(x.term) + ", 窗口不会关(那里面还装着别的东西)"}">✕ 关闭</button>`
+    // VS Code 里没有窗口句柄可关(标签页共用 IDE 主窗口), 但杀掉标签自己的 shell,
+    // VS Code 就会把标签页收走 —— 实测确认。所以这里单给一个按钮。
+    + (ide ? `<button class="danger" data-act="closetab" data-pid="${x.pid}"
+               title="连这个终端标签页一起关掉(会杀掉标签自己的 shell)">✕ 连标签页</button>` : "")
     + `</span>`;
   };
   if(w.length === 1) return `<div class="wins">${one(w[0])}</div>`;
@@ -565,7 +569,8 @@ $("#list").addEventListener("click", async e => {
     const d = await r.json();
     if(!d.ok) $("#stat").textContent = "切不过去: " + (d.why || "系统拒绝了前台切换, 请点任务栏");
   }
-  else if(act === "close"){
+  else if(act === "close" || act === "closetab"){
+    const withTab = act === "closetab";
     // 二次点击确认 —— 不用 confirm(), 模态框会卡住页面也挡住自动化
     const box = row.querySelector(".stbox");
     if(!btn.classList.contains("armed")){
@@ -573,8 +578,9 @@ $("#list").addEventListener("click", async e => {
       btn.textContent = "确认关?";
       if(box) box._armed = true;
       clearTimeout(btn._t);
+      const label = withTab ? "✕ 连标签页" : "✕ 关闭";
       btn._t = setTimeout(() => {
-        btn.classList.remove("armed"); btn.textContent = "✕ 关闭";
+        btn.classList.remove("armed"); btn.textContent = label;
         if(box) box._armed = false;
       }, 4000);
       return;
@@ -583,7 +589,8 @@ $("#list").addEventListener("click", async e => {
     btn.textContent = "关闭中…";
     const pid = +btn.dataset.pid;
     const r = await fetch("/api/close", {method:"POST",
-      headers:{"Content-Type":"application/json"}, body: JSON.stringify({id, pid})});
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({id, pid, close_tab: withTab})});
     const d = await r.json();
     if(box) box._armed = false;
     if(d.ok){
