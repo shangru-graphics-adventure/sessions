@@ -383,12 +383,12 @@ function winsHtml(s){
   const one = x => {
     const host = (x.term || "").toLowerCase();
     const pure = !host || PURE_TERM.includes(host);
-    const ide = host === "code.exe";
+    const ide = host === "code.exe" || (x.owner || "").toLowerCase() === "code.exe";
     return `<span class="win">`
     + `<span class="wt">${esc(x.title || "终端窗口")}</span>`
     + `<span class="wp">${esc(x.term || "")}${x.term ? " · " : ""}pid ${x.pid}</span>`
     + `<button data-act="focus" data-pid="${x.pid}" title="${ide
-        ? "切到那个 VS Code 窗口 — 但切不到具体是哪个终端标签页, 得你自己点"
+        ? "切到那个 VS Code 窗口 — 只能到窗口, 到不了具体哪个终端标签页(一个窗口多个标签共用一个句柄)"
         : "把这个窗口切到前台"}">⇥ 切过去</button>`
     + `<button class="danger" data-act="close" data-pid="${x.pid}" title="${pure
         ? "结束这个对话的进程(连同它派生的子进程); 该终端窗口里没有别的对话时, 窗口也一并关掉"

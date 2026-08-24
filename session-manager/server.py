@@ -517,7 +517,8 @@ def load_states():
     return out
 
 
-PROC_KEYS = ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title")
+PROC_KEYS = ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title",
+             "win_owner")
 
 
 def rec_procs(rec):
@@ -550,6 +551,9 @@ def live_windows(rec, alive):
             "term_pid": e.get("term_pid"),
             "term": e.get("term_name") or "",
             "title": e.get("win_title") or "",
+            # 这个 HWND 实际属于谁。VS Code 里终端宿主是没有窗口的渲染进程,
+            # 句柄来自它的祖先(IDE 主窗口), 切过去只能切到窗口、到不了标签页。
+            "owner": e.get("win_owner") or "",
             "ts": e.get("ts"),
         })
     return out
