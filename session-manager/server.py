@@ -975,23 +975,17 @@ def focus_win(w):
         r = actions.focus_wt_tab(hwnd, want)
         r["win"] = w
         if r.get("tab"):
-            # 标题是唯一的定位手段, 所以**重名标签分不开** —— 同一窗口里有别的对话
-            # 顶着同一个标题时(把同一对话开两份就会这样), 轮转会停在先遇到的那个。
-            # 分不清就说分不清, 别装作精确。
+            # 标题是唯一的定位手段, 所以**重名标签分不开** —— 同一窗口里有别的标签
+            # 顶着同一个标题时(把同一对话开两份就会这样), 会选中先遇到的那个。
+            # 重名从 UIA 顺手带回的全量标签名单里数, 零额外成本(曾经每个候选起一个
+            # 子进程去问标题, 一次 focus 拖到 3.5 秒)。
             core = actions._title_core(want)
-            dups = 0
-            states = load_states()
-            alive = alive_pids(all_pids(states))
-            for sid2, rec2 in states.items():
-                for w2 in live_windows(rec2, alive):
-                    # 对方的标题也现场问它的控制台 —— 记账标题清洗后是空串,
-                    # 拿空串互比会把所有标签都误判成重名
-                    if w2.get("hwnd") == hwnd and w2.get("pid") != w.get("pid")                             and core and actions._title_core(
-                                actions.console_title_of(w2["pid"])) == core:
-                        dups += 1
-            if dups:
+            dups = sum(1 for t in (r.get("all_tabs") or [])
+                       if core and core in actions._title_core(t)) - 1
+            if dups > 0:
                 r["why"] = ("这个窗口里还有 %d 个标签顶着同样的标题, 可能停在了别的"
                             "同名对话上 — 标题是唯一的定位手段, 重名分不开" % dups)
+            r.pop("all_tabs", None)
         return r
     r = actions.focus_window(hwnd)
     r["win"] = w
