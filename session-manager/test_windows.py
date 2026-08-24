@@ -93,7 +93,7 @@ def spawn_shell_with_claude(tmp, n):
     exe = os.path.join(d, "claude.exe")
     shutil.copyfile(sys.executable, exe)
     sh = subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-Command",
+        ["powershell.exe", "-NoProfile", "-NoExit", "-Command",
          "& '%s' -c 'import time; time.sleep(300)'" % exe],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
