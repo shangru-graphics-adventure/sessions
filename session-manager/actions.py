@@ -462,6 +462,40 @@ def console_title_of(pid, timeout=3.0):
     return ""
 
 
+def wt_select_tab(hwnd, want, timeout=8.0):
+    """UI Automation 直选 WT 标签: 瞬切(~240ms 实测), 不需要窗口在前台, 不发键盘。
+
+    WT 的标签栏对 UIA 是可见的(每个标签一个 TabItem, 名字就是标题), 拿
+    SelectionItemPattern.Select() 点它 —— 这比"提前台再轮 Ctrl+Tab"(一格 0.18s,
+    上限 3 秒, 还要求焦点全程不被抢)干净一整个量级。脚本在 wt_tab.ps1。
+
+    返回 (state, payload): ("selected", 标签名) / ("notfound", [全部标签名]) /
+    ("error", 原因)。notfound 是**权威结论**(UIA 枚举了真实标签列表), 不该再退回
+    键盘轮转; 只有 error(没有 powershell / UIA 被禁)才值得退。
+    """
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wt_tab.ps1")
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", script, "-hwnd", str(hwnd), "-want", want],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=timeout, creationflags=NO_WINDOW)
+        out = r.stdout.decode("utf-8", "replace").strip()
+        lines = out.splitlines()
+        allnames = []
+        for ln in lines:
+            if ln.startswith("ALL::"):
+                allnames = [t for t in ln[5:].split("||") if t]
+        if lines and lines[0].startswith("SELECTED::"):
+            return "selected", {"name": lines[0][10:].strip(), "all": allnames}
+        if lines and lines[0].startswith("NOTFOUND::"):
+            return "notfound", [t for t in lines[0][10:].split("||") if t]
+        return "error", (r.stderr.decode("utf-8", "replace").strip()[:200]
+                         or "没有输出")
+    except Exception as e:
+        return "error", str(e)[:200]
+
+
 def focus_wt_tab(hwnd, want_title, max_tabs=16):
     """把一个 Windows Terminal 窗口切到前台, 并轮到标题匹配的那个标签。
 
@@ -487,6 +521,16 @@ def focus_wt_tab(hwnd, want_title, max_tabs=16):
 
     if want in cur() or cur() in want:
         return dict(r, tab=True, title=window_title(hwnd))
+
+    state, payload = wt_select_tab(hwnd, want)
+    if state == "selected":
+        return dict(r, tab=True, how="uia", title=payload["name"],
+                    all_tabs=payload["all"])
+    if state == "notfound":
+        return dict(r, tab=False, seen=payload,
+                    why="这个窗口的 %d 个标签里没有标题含「%s」的(UIA 枚举过了), "
+                        "它可能开在别的窗口" % (len(payload), want[:20]))
+    # UIA 走不了(没有 powershell / 被策略禁了) —— 退回键盘轮转
     # 不能用"标题重复出现"当作转满一圈的判据 —— 窗口里可以有两个标签顶着同样的
     # 标题(同一对话开两份就会), 那样第二个同名标签会被误判成"回到起点"而提前放弃
     # (实测踩到: 两对重名标签的窗口里, 找一个明明存在的独名标签也会失败)。
