@@ -5,6 +5,8 @@ session-manager/state/              # per-session live-status records (hooks)
 session-manager/config.json         # your machine's paths & port
 session-manager/titler/corpus.jsonl
 session-manager/titler/titles.jsonl
+session-manager/advice.jsonl         # 「建议」的复盘缓存
+session-manager/advice_last_raw.txt  # 解析失败时留下的模型原始输出
 ticket-desk/tickets.json
 ticket-desk/tickets.broken.*.json
 ticket-desk/claude-skill/desk_path.txt
