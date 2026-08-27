@@ -73,9 +73,10 @@
   .kb{color:var(--dim2);font-size:11px;margin-left:8px}
   .topics{margin-top:3px;font-size:12.5px;color:var(--fg2);cursor:pointer;
           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .topics.open{white-space:normal}
-  .topics.open .tp{display:block;margin:2px 0}
   .tp{margin-right:14px}
+  .tp[data-act]{cursor:pointer}
+  .tp[data-act]:hover{color:var(--accent)}
+  .tp[data-act]:hover i{background:var(--accent-bright);color:#fff}
   .tp i{display:inline-block;min-width:15px;font-style:normal;font-size:10px;
         color:var(--dim);margin-right:3px}
   .arts{margin-top:4px;font-size:12px;color:var(--dim);cursor:pointer;
@@ -143,13 +144,55 @@
   .st .txt b{color:var(--dim);font-weight:400}
   .st-stale{background:var(--warn-bg);border-color:var(--warn)}
   .st-stale .dot,.st-stale .lab{color:var(--warn)}
-  .tx{margin-top:8px;border-top:1px solid var(--line);padding-top:8px;
-      max-height:340px;overflow:auto;font-size:12.5px}
-  .tx div{margin-bottom:7px;white-space:pre-wrap;word-break:break-word}
-  .tx .u{color:var(--accent)}
-  .tx .a{color:var(--fg2)}
-  .tx .tag{font-size:10px;text-transform:uppercase;letter-spacing:.5px;
-           color:var(--dim);margin-right:6px}
+  /* ---- 全文树: 两层展开(先摊开我的提问, 再逐条摊开 claude 的回复) ---- */
+  .tree{margin-top:8px;border-top:1px solid var(--line);padding-top:8px;font-size:12.5px}
+  .thead{display:flex;gap:10px;align-items:center;margin-bottom:7px;
+         font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+         text-transform:uppercase;color:var(--dim);font-weight:600}
+  .thead button{padding:2px 8px;font-size:11px;letter-spacing:0;
+                text-transform:none;font-weight:400}
+  .turn{border-left:2px solid var(--line);padding-left:10px;margin:0 0 11px 2px}
+  .turn:hover{border-left-color:var(--line2)}
+  .turn .qn{white-space:pre-wrap;word-break:break-word;color:var(--accent);font-weight:500}
+  .turn .no{font-family:var(--mono);font-size:10px;color:var(--dim);
+            background:var(--panel2);border-radius:2px;padding:0 4px;margin-right:6px}
+  .turn .qt{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-left:7px}
+  /* 默认只给 3 行 —— 一屏能看见十几轮, 想细看再点开那一条 */
+  .turn .an{margin-top:4px;white-space:pre-wrap;word-break:break-word;color:var(--fg2);
+            cursor:pointer;display:-webkit-box;-webkit-line-clamp:3;
+            -webkit-box-orient:vertical;overflow:hidden}
+  .turn .an.open{display:block;overflow:auto;max-height:56vh;cursor:auto;
+                 background:var(--panel2);border-radius:3px;padding:6px 8px}
+  .turn .an.full{cursor:auto}
+  /* .an 自己设了 display, 会盖掉 [hidden] 的 UA 规则 —— 必须显式压回去 */
+  .turn .an[hidden]{display:none}
+  .turn .tl{color:var(--dim2)}          /* 工具流水: 在场但不抢戏 */
+  .turn.hit{border-left-color:var(--accent);background:var(--accent-soft)}
+  .turn .amore{display:inline-block;margin-top:3px;font-size:11px;color:var(--dim);
+               border:1px solid var(--line);border-radius:3px;padding:1px 7px;cursor:pointer}
+  .turn .amore:hover{color:var(--accent);border-color:var(--accent)}
+  /* ---- 建议(复盘): 四段固定结构, 顺序就是要回答的四个问题 ---- */
+  .adv{margin-top:8px;border-top:1px solid var(--line);padding-top:8px;font-size:12.5px}
+  .advhead{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:7px;
+           font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+           text-transform:uppercase;color:var(--dim);font-weight:600}
+  .advhead .muted,.advempty .muted{letter-spacing:0;text-transform:none;font-weight:400}
+  .advhead button,.advempty button{padding:2px 8px;font-size:11px;letter-spacing:0;
+                                   text-transform:none;font-weight:400}
+  .advstale{color:var(--warn);letter-spacing:0;text-transform:none}
+  .advempty{color:var(--dim);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .advfail{color:var(--warn)}
+  .advsec{display:flex;gap:10px;margin:0 0 7px 2px;border-left:2px solid var(--line);
+          padding-left:10px}
+  .advsec>b{flex:none;width:64px;font-family:var(--mono);font-size:11px;color:var(--dim);
+            font-weight:600;padding-top:1px}
+  .advsec>div,.advsec>ol{flex:1;min-width:0;color:var(--fg2);word-break:break-word}
+  .advsec ol{margin:0;padding-left:19px}
+  .advsec li{margin-bottom:3px}
+  /* 判词染色: 一眼看出"达到没有", 不用读完 */
+  .advsec .v-good{color:var(--ok);font-weight:500}
+  .advsec .v-bad{color:var(--warn);font-weight:500}
+  .advsec .v-mid{color:var(--fg2)}
   .hint{color:var(--dim);font-size:12px;margin:6px 0 14px}
   mark{background:var(--star-bg);color:var(--star);padding:0 2px;border-radius:2px}
 
@@ -301,7 +344,10 @@ function render(hl){
     const t = r.title || "";
     const tp = r.topics || [];
     let topics = tp.length
-      ? tp.map((t,i) => `<span class="tp"><i>${i+1}</i>${esc(t)}</span>`).join("")
+      ? tp.map((t,i) => t.startsWith("…(")
+          ? `<span class="tp muted">${esc(t)}</span>`
+          : `<span class="tp" data-act="topic" data-t="${esc(t)}"
+                   title="跳到这一轮并展开回复"><i>${i+1}</i>${esc(t)}</span>`).join("")
       : '<span class="tp muted">(没有可提取的发言)</span>';
     const KI = {doc:"▤", code:"‹›", data:"▦"};
     const av = r.artifacts || [], pv = r.published || [];
@@ -347,20 +393,236 @@ function render(hl){
       <div class="meta"><span class="cwd">${esc(r.cwd || r.project)}</span>
         <span class="kb">${r.turns ? r.turns + ' 条发言' : ''} ${r.kb ? '· ' + r.kb + 'KB' : ''}</span></div>
       <div class="stbox"></div>
-      <div class="topics" data-act="topics" title="点击展开/收起全部话题">${topics}</div>
+      <div class="topics" data-act="topics"
+           title="点一下摊开全文(全部提问); 点某条前面的编号直接跳到那一轮">${topics}</div>
       ${arts ? `<div class="arts" data-act="arts" title="点击展开/收起产出的文件">${arts}</div>` : ''}
       ${snip ? `<div class="snip">${snip}</div>` : ''}
       <div class="r3">
         <textarea class="note" data-act="note" placeholder="我的注释…">${esc(r.note)}</textarea>
         <div class="acts">
           <button class="btn-go" data-act="resume">Resume</button>
-          <button data-act="peek">看内容</button>
+          <button data-act="tree" title="展开整个对话: 默认只显示最近 3 条提问, 每条回复只给 3 行">全文</button>
+          <button data-act="adv" title="复盘这个对话: 讲了什么 / 初衷是什么 / 达到没有 / 接着做什么">建议</button>
           <button data-act="cmd">复制命令</button>
         </div>
       </div>
-      <div class="tx" style="display:none"></div>
+      <div class="adv" style="display:none"></div>
+      <div class="tree" style="display:none"></div>
     </div>`;
   }).join("");
+}
+
+// ---- 建议(复盘) --------------------------------------------------------
+// 长对话最常见的病是"迷失重点": 开头想干 A, 二十轮之后在修 B 的边角。这一段就是
+// 把这件事显式问出来 —— 讲了什么 / 初衷是什么 / 达到没有 / 接着做什么。
+// 生成要跑一次 `claude -p`(约 30-60 秒), 所以结果落盘, 再点直接出缓存;
+// 缓存记了"生成时对话有多少轮", 之后又聊了几轮就在页面上明说这份建议有多旧。
+const ADVISING = new Map();          // id -> {t0, eta, turns}
+let ADV_MODEL = "claude -p";         // 服务端用的哪个模型, 第一次问后端时学到
+
+function advHtml(rec, turnsNow){
+  const a = (rec && rec.advice) || {};
+  const stale = turnsNow && rec.turns && turnsNow > rec.turns;
+  const verdict = (a.status || "").slice(0, 4);
+  const cls = /已达成/.test(verdict) ? "good" : /未达成|跑偏/.test(verdict) ? "bad" : "mid";
+  return `<div class="advhead">
+      <span>复盘</span>
+      <span class="muted">${esc(rec.at || "")} · ${esc(rec.model || "")} ·
+        基于 ${rec.turns} 轮${rec.ms ? " · 用了 " + Math.round(rec.ms/1000) + "s" : ""}</span>
+      ${stale ? `<span class="advstale">之后又聊了 ${turnsNow - rec.turns} 轮, 这份是旧的</span>` : ""}
+      <button data-act="advgo" data-force="1">重新生成</button>
+    </div>
+    <div class="advsec"><b>讲了什么</b><div>${esc(a.topic || "(空)")}</div></div>
+    <div class="advsec"><b>初衷</b><div>${esc(a.goal || "(空)")}</div></div>
+    <div class="advsec"><b>达到没有</b><div class="v-${cls}">${esc(a.status || "(空)")}</div></div>
+    <div class="advsec"><b>接着做什么</b><ol>${
+      (a.next || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>(空)</li>"}</ol></div>`;
+}
+
+// 耗时随对话长短差一倍(实测 3 轮 18s / 71 轮 34s), 所以不能像标题那样只存一个平均值。
+// 存 (轮数, 秒) 的样本, 用最小二乘拟一条直线 eta = a + b·轮数; 样本不够就退回常数。
+const ADV_HIST = "adviseHist";
+
+let ADV_SERVER_HIST = [];            // 后端 advice.jsonl 里的历史, 换浏览器也不用从零学
+
+function advHist(){
+  let mine = [];
+  try{ mine = JSON.parse(localStorage.getItem(ADV_HIST) || "[]"); }catch(_){}
+  return ADV_SERVER_HIST.concat(mine).slice(-12);
+}
+
+function advEta(turns){
+  const h = advHist().filter(p => p[1] > 0);
+  if(h.length < 3) return h.length ? h[h.length - 1][1] : 25;
+  const n = h.length;
+  const sx = h.reduce((s, p) => s + p[0], 0), sy = h.reduce((s, p) => s + p[1], 0);
+  const sxx = h.reduce((s, p) => s + p[0] * p[0], 0);
+  const sxy = h.reduce((s, p) => s + p[0] * p[1], 0);
+  const den = n * sxx - sx * sx;
+  // 样本里轮数没拉开(den≈0)时直线拟不出来, 用均值 —— 这时它退化成标题那套
+  const eta = den === 0 ? sy / n
+            : (sy / n) + ((n * sxy - sx * sy) / den) * (turns - sx / n);
+  return Math.min(180, Math.max(8, eta));
+}
+
+function advRemember(turns, sec){
+  // 只往**本地那份**里追加。写回 advHist() 的话, 后端历史每次都会被再抄一遍进来,
+  // 同一次生成会在样本里重复 N 次, 拟合被它自己的回声带偏。
+  let mine = [];
+  try{ mine = JSON.parse(localStorage.getItem(ADV_HIST) || "[]"); }catch(_){}
+  mine.push([turns || 0, Math.round(sec)]);
+  try{ localStorage.setItem(ADV_HIST, JSON.stringify(mine.slice(-12))); }catch(_){}
+}
+
+function paintAdvising(){
+  ADVISING.forEach((st, id) => {
+    const row = document.querySelector(`.row[data-id="${id}"]`);
+    if(!row) return;
+    const sec = Math.round((performance.now() - st.t0) / 1000);
+    const left = Math.max(0, Math.round(st.eta - sec));
+    // 按钮上也走秒: section 收起来了照样看得见还要多久(和 ↻ 重起标题一个规矩)
+    const btn = row.querySelector('[data-act="adv"]');
+    if(btn) btn.textContent = "复盘中 " + sec + "s";
+    const box = row.querySelector(".adv");
+    if(!box) return;
+    box.innerHTML = `<div class="advempty">正在复盘… 已 ${sec}s ·
+      ${left ? "预计还要 " + left + "s" : "比平常久了, 还在跑"}
+      <span class="muted">(${st.turns || "?"} 轮 · ${esc(ADV_MODEL)})</span></div>`;
+  });
+}
+setInterval(() => { if(ADVISING.size) paintAdvising(); }, 500);
+
+async function openAdv(row, force){
+  const id = row.dataset.id;
+  const box = row.querySelector(".adv");
+  box.style.display = "block"; box.classList.add("on");
+  const btn = row.querySelector('[data-act="adv"]');
+  btn.textContent = "收起建议";
+  const turnsNow = (row.querySelector(".kb")?.textContent.match(/(\d+)\s*条发言/) || [])[1];
+  if(!force){
+    box.innerHTML = "读取中…";
+    let j = {};
+    try{ j = await (await fetch("/api/advice?id=" + id)).json(); }catch(_){}
+    if(j.model) ADV_MODEL = j.model;
+    if(Array.isArray(j.hist)) ADV_SERVER_HIST = j.hist;
+    // 有缓存就直接给, 要不要重算由你点; 没有就当场生成 —— 点「建议」要的就是建议本身,
+    // 再让人点一次"生成"是多余的一步。
+    if(j.rec){ box.innerHTML = advHtml(j.rec, +turnsNow || 0); return; }
+  }
+  if(ADVISING.has(id)) return;          // 已经在跑了, 别叠第二个子进程
+  const turns = +turnsNow || 0;
+  ADVISING.set(id, {t0: performance.now(), eta: advEta(turns), turns});
+  paintAdvising();
+  let d = {};
+  try{
+    const r = await fetch("/api/advise", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({id, force: !!force})});
+    d = await r.json();
+  }catch(err){ d = {ok: false, error: String(err)}; }
+  ADVISING.delete(id);
+  const row2 = document.querySelector(`.row[data-id="${id}"]`);
+  const btn2 = row2 && row2.querySelector('[data-act="adv"]');
+  if(btn2) btn2.textContent = "收起建议";      // paintAdvising 把它改成了走秒
+  const box2 = row2 && row2.querySelector(".adv");
+  if(!box2) return;
+  if(d.ok){
+    if(d.model) ADV_MODEL = d.model;
+    // 真实耗时进样本 —— 缓存命中的那次不算, 它测的不是模型
+    if(d.ms && !d.from_cache) advRemember(d.turns || turns, d.ms / 1000);
+    box2.innerHTML = advHtml(d, +turnsNow || 0);
+  }else{
+    box2.innerHTML = `<div class="advempty advfail">没跑出来: ${esc(d.error || "未知原因")}
+      <button data-act="advgo" data-force="1">再试一次</button></div>`;
+  }
+}
+
+// ---- 全文树 ------------------------------------------------------------
+// 一个对话可以有上百轮、单轮回复上万字, 全摊开就没法看了。所以两层折叠:
+// 第一层只留最近 3 条提问(最近的才是"我刚才在干嘛"), 第二层每条回复只给 3 行。
+const TREE_HEAD = 3;
+
+function turnHtml(t, no){
+  const tail = (t.tools ? ` · ${t.tools} 次工具` : "")
+             + (t.sub ? ` · ${t.sub} 条子 agent` : "")
+             + (t.cut ? " · 回复过长已截断" : "");
+  const ts = (t.ts || "").slice(0, 16).replace("T", " ");
+  // 折叠时的 3 行给"它说了什么", 不给工具流水 —— 一轮回复常以十几个工具调用开头,
+  // 照原样截 3 行会全是 "· Bash 读 xxx", 等于什么都没看见。
+  const lines = (t.a || "").split("\n");
+  const said = lines.filter(l => l && !l.startsWith("· ")).join("\n");
+  const full = lines.map(l => l.startsWith("· ")
+      ? `<span class="tl">${esc(l)}</span>` : esc(l)).join("\n");
+  const prev = said
+    ? esc(said)
+    : `<span class="tl">(这一轮只有 ${t.tools} 次工具调用, 没有文字)</span>`;
+  return `<div class="turn">
+    <div class="qn"><span class="no">#${no}</span>${esc(t.q)}<span class="qt">${esc(ts)}</span></div>
+    <div class="an" data-act="ansr">${prev}</div>
+    <div class="an full" data-act="ansr" hidden>${full || "(空)"}</div>
+    <div class="amore" data-act="ansr" data-tail="${esc(tail)}">展开回复${esc(tail)}</div>
+  </div>`;
+}
+
+// 全文的唯一入口: 「全文」按钮 / 点话题行 / 点某条话题的编号 都走这里。
+// opts.all  = 打开时是否直接显示全部提问
+// opts.jump = 话题原文(前 46 字), 用它去 turns 里找对应那一轮, 滚过去并展开回复
+async function openTree(row, opts){
+  opts = opts || {};
+  const box = row.querySelector(".tree");
+  const btn = row.querySelector('[data-act="tree"]');
+  box.style.display = "block"; box.classList.add("on");
+  btn.textContent = "收起全文";
+  // 每次点开都重抓 —— 对话可能还在跑, 吃缓存会让你看到一份过期的树。
+  // 抓一次 ~100ms, 没有缓存的理由。有旧数据就先画出来占位, 不闪空白。
+  if(box._data) renderTree(box); else box.innerHTML = "读取中…";
+  let d;
+  try{
+    d = await (await fetch("/api/tree?id=" + row.dataset.id)).json();
+  }catch(err){
+    if(!box._data) box.innerHTML = "读不到: " + esc(String(err));
+    return;
+  }
+  if(d.error){
+    if(!box._data) box.innerHTML = "读不到这个对话的记录";
+    return;
+  }
+  box._data = d;
+  if(opts.all !== undefined) box._all = opts.all;
+  else if(box._all === undefined) box._all = false;   // 展开状态跨重抓保留
+  if(opts.jump){
+    // 话题是发言的前 46 字, 两边同样做过空白折叠, 所以前缀比对就够
+    const i = d.turns.findIndex(t => (t.q || "").startsWith(opts.jump));
+    if(i >= 0){
+      box._all = true;
+      renderTree(box);
+      const turn = box.querySelectorAll(".turn")[i];
+      if(turn){
+        turn.querySelector(".amore").click();
+        turn.scrollIntoView({block: "center"});
+        turn.classList.add("hit");
+        setTimeout(() => turn.classList.remove("hit"), 1600);
+      }
+      return;
+    }
+  }
+  renderTree(box);
+}
+
+function renderTree(box){
+  const d = box._data;
+  if(!d){ box.innerHTML = "(空)"; return; }
+  const n = d.turns.length;
+  const show = box._all ? d.turns : d.turns.slice(-TREE_HEAD);
+  const off = n - show.length;
+  const btn = box._all
+    ? `只看最近 ${TREE_HEAD} 条`
+    : (off > 0 ? `显示全部 ${n} 条提问` : "全部已显示");
+  box.innerHTML =
+    `<div class="thead"><span>全文 · ${d.total} 条提问</span>`
+    + (d.dropped ? `<span style="text-transform:none;letter-spacing:0">太长, 最早的 ${d.dropped} 条没回传</span>` : "")
+    + `<button data-act="treeall" ${off > 0 || box._all ? "" : "disabled"}>${btn}</button></div>`
+    + show.map((t, i) => turnHtml(t, off + i + 1)).join("");
 }
 
 // ---- 实时状态 ----------------------------------------------------------
@@ -660,9 +922,6 @@ $("#list").addEventListener("click", async e => {
     }
     pollStatus();
   }
-  else if(act === "topics"){
-    btn.classList.toggle("open");
-  }
   else if(act === "arts"){
     // 展开后点里面的链接不该把它收回去
     if(e.target.closest(".art")) return;
@@ -676,17 +935,49 @@ $("#list").addEventListener("click", async e => {
     btn.textContent = d.ok ? "✓" : "✗";
     setTimeout(() => btn.textContent = old, 1200);
   }
-  else if(act === "peek"){
-    const box = row.querySelector(".tx");
-    if(box.style.display !== "none"){ box.style.display = "none"; btn.textContent = "看内容"; return; }
-    box.style.display = "block";
-    box.innerHTML = "读取中…";
-    btn.textContent = "收起";
-    const d = await (await fetch("/api/transcript?id=" + id + "&n=30")).json();
-    box.innerHTML = (d.msgs || []).map(m =>
-      `<div class="${m.role==='user'?'u':'a'}"><span class="tag">${m.role==='user'?'我':'claude'}</span>${esc(m.text)}</div>`
-    ).join("") || "(空)";
-    box.scrollTop = box.scrollHeight;
+  else if(act === "tree"){
+    const box = row.querySelector(".tree");
+    if(box.style.display !== "none"){
+      box.style.display = "none"; box.classList.remove("on");
+      btn.textContent = "全文"; return;
+    }
+    await openTree(row);
+  }
+  else if(act === "adv"){
+    const box = row.querySelector(".adv");
+    if(box.style.display !== "none"){
+      box.style.display = "none"; box.classList.remove("on");
+      btn.textContent = "建议"; return;
+    }
+    await openAdv(row, false);
+  }
+  else if(act === "advgo"){
+    await openAdv(row, !!btn.dataset.force);
+  }
+  else if(act === "topics"){
+    // 话题行本身就是"我问了哪几件事"的一行索引 —— 点它等于要看全部, 直接摊开全文
+    await openTree(row, {all: true});
+  }
+  else if(act === "topic"){
+    await openTree(row, {all: true, jump: btn.dataset.t});
+  }
+  else if(act === "treeall"){
+    const box = btn.closest(".tree");
+    box._all = !box._all;
+    renderTree(box);
+    if(!box._all) box.scrollIntoView({block: "nearest"});
+  }
+  else if(act === "ansr"){
+    // 点摘要或"展开回复"都能翻转; 展开后的正文要能选中复制, 所以只让按钮收回去
+    const turn = btn.closest(".turn");
+    const prev = turn.querySelector(".an");
+    const full = turn.querySelector(".an.full");
+    const more = turn.querySelector(".amore");
+    if(btn === full) return;
+    const open = full.hidden;
+    full.hidden = !open; prev.hidden = open;
+    full.classList.toggle("open", open);
+    more.textContent = (open ? "收起回复" : "展开回复") + (more.dataset.tail || "");
   }
 });
 
@@ -733,7 +1024,13 @@ $("#onlyLive").onchange = () => { render(); paintStatus(); };
 load();                              // load() 内部会接着调一次 pollStatus
 setInterval(pollStatus, 2000);
 document.addEventListener("visibilitychange", () => { if(!document.hidden) pollStatus(); });      // 实时状态: 2 秒一刷, 只重画徽章不重画整表
-setInterval(() => { if(!document.hidden) load(); }, 60000);   // 列表本身 1 分钟刷一次
+// 列表本身 1 分钟刷一次 —— 但重画会把展开的全文/建议冲掉, 正在看就先不刷
+setInterval(() => {
+  if(document.hidden) return;
+  if(document.querySelector(".tree.on, .adv.on")) return;
+  if(ADVISING.size) return;                 // 有复盘正在跑, 更不能重画
+  load();
+}, 60000);
 </script>
 </body>
 </html>

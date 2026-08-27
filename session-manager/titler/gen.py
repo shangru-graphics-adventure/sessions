@@ -64,9 +64,13 @@ def gen_title(msgs, timeout=180):
     prompt = io.open(os.path.join(HERE, "prompt.txt"), encoding="utf-8").read()
     p = prompt + "\n" + "\n".join("- " + m for m in msgs)
     try:
+        # cwd 必须钉在本目录: `claude -p` 按 cwd 建一次性会话文件, 而 IGNORE_PROJ
+        # 排掉的正是**本目录**的 slug。不钉的话它落在 server 的 cwd 下, 于是每起
+        # 一个标题就往用户的对话列表里塞一条"给这个对话起标题"的噪音
+        # (2026-08-26 发现时已经积了 17 条)。
         r = subprocess.run(CMD, input=p.encode("utf-8"),
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           timeout=timeout, creationflags=NO_WINDOW)
+                           timeout=timeout, cwd=HERE, creationflags=NO_WINDOW)
     except Exception as e:
         return "", str(e)[:200]
     t = clean(r.stdout.decode("utf-8", "replace"))

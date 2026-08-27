@@ -21,6 +21,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 import config                             # 本机配置(端口/路径), 见 config.py
+import advisor                            # 「建议」的复盘生成, 见 advisor.py
 import actions                            # 窗口定位与按键注入
 from preview import preview_html, reveal   # 产物预览/定位, 见 preview.py
 
@@ -35,6 +36,8 @@ AUTO_TITLES_PATH = os.path.join(HERE, "titler", "titles.jsonl")
 # 生成 auto_title 的批处理自己也是几千次 `claude -p` 调用, 每次都会在 projects/ 下
 # 落一个会话文件。它们不是真对话, 必须从列表与全文搜索里排除, 否则噪音比正文还多。
 IGNORE_PROJ = {config.project_slug(os.path.join(HERE, "titler"))}
+# 本工具自己喂给 `claude -p` 的提示开头 —— 用来认出并藏掉它自己产生的一次性会话
+SELF_PROMPT_HEAD = "下面是一个 Claude Code 对话"
 CACHE_PATH = os.path.join(HERE, "cache.json")
 STATE_DIR = os.path.join(HERE, "state")     # hook_state.py 每会话写一个
 PORT = config.PORT
@@ -714,6 +717,12 @@ def list_sessions(limit):
     stat = status_map(with_activity=False)
     for mt, fp, sid, proj in files[:limit]:
         info = scan_file(fp) or {}
+        # 本工具自己起的 `claude -p`(起标题 / 做复盘)会留下一次性会话。新的都钉在
+        # titler/ 的 slug 下、已被 IGNORE_PROJ 排掉; 这一条是给**历史遗留**的那些兜底,
+        # 它们落在 server 自己的 cwd 下, 混在用户的真对话里(2026-08-26 实测 17 条)。
+        if (info.get("first") or "").startswith(SELF_PROMPT_HEAD):
+            total -= 1
+            continue
         n = notes.get(sid, {})
         try:
             size = os.path.getsize(fp)
@@ -821,17 +830,41 @@ def grep_sessions(kw, scan_n):
     return hits, len(files), n_all
 
 
-def transcript(sid, n=40):
-    """取某会话最后 n 条消息(人+AI 文本), 用于在页面里确认"是不是这个"。"""
-    path = None
-    for d in os.listdir(PROJ):
-        fp = os.path.join(PROJ, d, sid + ".jsonl")
-        if os.path.exists(fp):
-            path = fp
-            break
+# ---------------------------------------------------------------- 对话全文树
+
+TREE_TURN_CHARS = 60_000      # 单轮回复最多回传多少字(防止一条超长回复撑爆前端)
+TREE_MAX_TURNS = 400          # 最多回传多少轮
+
+
+def _tool_line(blk):
+    """把一次工具调用压成一行, 让"只有工具没有文字"的回复不至于显示成空白。"""
+    name = blk.get("name") or "tool"
+    inp = blk.get("input") or {}
+    return "· %s %s" % (name, _tool_brief(inp, name))
+
+
+def conv_tree(sid):
+    """把一个对话拆成 [{q: 我说的, a: claude 的回复, ...}] 的轮次列表。
+
+    前端的展开是两层的(先展开提问, 再逐条展开回复), 所以这里必须给全文而不是摘要。
+    子 agent(isSidechain)的往返不算轮次 —— 那是 claude 自己派出去的活, 混进来会把
+    "我问了什么"这条主线冲散; 但它们的条数记在所属轮次上, 免得看起来无中生有。
+    """
+    path = find_transcript(sid)
     if not path:
         return None
-    out = []
+    turns = []
+    cur = None
+
+    def flush():
+        if cur is None:
+            return
+        txt = "\n".join(p for p in cur["_a"] if p).strip()
+        cur["a"] = txt[:TREE_TURN_CHARS]
+        cur["cut"] = len(txt) > TREE_TURN_CHARS
+        del cur["_a"]
+        turns.append(cur)
+
     try:
         with io.open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -844,16 +877,37 @@ def transcript(sid, n=40):
                 ty = d.get("type")
                 if ty not in ("user", "assistant"):
                     continue
-                t = _text_of(d.get("message", {}))
-                if ty == "user" and not _is_real_user_text(t):
+                if d.get("isSidechain"):
+                    if cur is not None:
+                        cur["sub"] += 1
                     continue
-                t = t.strip()
-                if not t:
+                msg = d.get("message") or {}
+                if ty == "user":
+                    t = _text_of(msg).strip()
+                    # 工具结果也是 type=user, 不是我说的话
+                    if not t or not _is_real_user_text(t):
+                        continue
+                    flush()
+                    cur = {"q": " ".join(t.split())[:4000], "ts": d.get("timestamp", ""),
+                           "tools": 0, "sub": 0, "_a": []}
                     continue
-                out.append({"role": ty, "text": _clean(t, 1200), "ts": d.get("timestamp", "")})
+                if cur is None:      # 极少数对话以 assistant 开头(--continue 拼接)
+                    cur = {"q": "(这一轮前面没有我的发言)", "ts": d.get("timestamp", ""),
+                           "tools": 0, "sub": 0, "_a": []}
+                for blk in msg.get("content") or []:
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("type") == "text":
+                        cur["_a"].append(blk.get("text", ""))
+                    elif blk.get("type") == "tool_use":
+                        cur["tools"] += 1
+                        cur["_a"].append(_tool_line(blk))
     except Exception:
         pass
-    return out[-n:]
+    flush()
+    total = len(turns)
+    return {"turns": turns[-TREE_MAX_TURNS:], "total": total,
+            "dropped": max(0, total - TREE_MAX_TURNS)}
 
 
 # ---------------------------------------------------------------- resume
@@ -1179,12 +1233,18 @@ class Handler(BaseHTTPRequestHandler):
             fp = q.get("path", [""])[0]
             return self._send(200, reveal(fp))
 
-        if u.path == "/api/transcript":
+        if u.path == "/api/advice":
             sid = q.get("id", [""])[0]
-            msgs = transcript(sid, int(q.get("n", ["40"])[0]))
-            if msgs is None:
+            return self._send(200, {"rec": advisor.cached(sid),
+                                    "model": advisor.MODEL,
+                                    "hist": advisor.hist()})
+
+        if u.path == "/api/tree":
+            sid = q.get("id", [""])[0]
+            d = conv_tree(sid)
+            if d is None:
                 return self._send(404, {"error": "not found"})
-            return self._send(200, {"msgs": msgs})
+            return self._send(200, d)
 
         return self._send(404, {"error": "no route"})
 
@@ -1228,6 +1288,26 @@ class Handler(BaseHTTPRequestHandler):
             if r.get("ok"):
                 _AT_CACHE["mtime"] = None          # 逼下次 load_auto_titles 重读
             return self._send(200, r)
+
+        if u.path == "/api/advise":
+            sid = data.get("id", "")
+            if not sid:
+                return self._send(400, {"error": "no id"})
+            if not data.get("force"):
+                rec = advisor.cached(sid)
+                tree = conv_tree(sid)
+                # 缓存是按"生成时对话有多少轮"记的; 一轮没多就直接用旧的
+                if rec and tree and rec.get("turns") == (tree.get("total") or 0):
+                    rec["ok"] = True
+                    rec["from_cache"] = True
+                    return self._send(200, rec)
+            tree = conv_tree(sid)
+            if tree is None:
+                return self._send(404, {"ok": False, "error": "找不到这个对话"})
+            try:
+                return self._send(200, advisor.advise(sid, tree))
+            except Exception as e:
+                return self._send(500, {"ok": False, "error": str(e)[:300]})
 
         if u.path == "/api/resume":
             sid = data.get("id", "")
