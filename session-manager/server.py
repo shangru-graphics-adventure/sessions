@@ -1389,6 +1389,20 @@ def main():
     load_cache()
     prune_states()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    # 环回**双栈**监听(2026-08-29 实测, 看盘 8080 上量到的同一个缺陷):
+    # 本机 `localhost` 解析出 **::1 排在 127.0.0.1 前面**, 只绑 IPv4 时每个新连接
+    # 都要先试 IPv6 失败再回落 —— 实测 python urlopen 2.04s / 浏览器导航
+    # connect 303ms、ttfb 311ms; 补上 ::1 之后 ttfb 6.8ms(45x), 连接数 110→1。
+    # 只加环回地址, **暴露面不变**。Windows 默认 IPV6_V6ONLY=1, 两个套接字互不抢端口。
+    try:
+        import socket as _sk6, threading as _th6
+        class _Srv6(ThreadingHTTPServer):
+            address_family = _sk6.AF_INET6
+        _th6.Thread(target=_Srv6(("::1", PORT), Handler).serve_forever,
+                    name="http-v6", daemon=True).start()
+    except Exception as _e6:
+        print("IPv6 环回未监听(localhost 会慢 ~300ms): %s" % _e6)
+
     print("Claude 对话管理器  ->  http://localhost:%d/" % PORT)
     print("扫描目录: %s" % PROJ)
     print("注释存于: %s" % NOTES_PATH)
