@@ -382,7 +382,10 @@ function render(hl){
     <div class="row ${r.star?'star':''}" data-id="${r.id}">
       <div class="r1">
         <button class="starbtn ${r.star?'on':''}" data-act="star">★</button>
-        <span class="time">${ago(now - r.mtime)}</span>
+        <span class="time" title="最后一次真的说话(user/assistant 行的时间戳)${
+            r.ftime && r.ftime - r.mtime > 600
+              ? ` — 文件 ${ago(now - r.ftime)}还被写过, 那是开着的窗口在写记账行, 不算活动`
+              : ""}">${ago(now - r.mtime)}</span>
         <input class="title ${(!t && r.auto_title)?'auto':''}" data-act="title" value="${esc(t)}"
                placeholder="${esc(r.auto_title || r.first) || '(无标题 — 点这里自己命名)'}"
                title="${esc(r.auto_title ? 'haiku 自动标题(点击可改写为自己的)' : '')}">
