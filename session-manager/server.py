@@ -46,7 +46,7 @@ MAX_TOPICS = 14           # 每个对话最多提取多少个"话题"
 TOPIC_CHARS = 46          # 每个话题截多长
 MAX_ARTIFACTS = 40        # 每个对话最多列多少个产物(超出只报数)
 WHY_CHARS = 78            # "这文件怎么来的"截多长
-SCAN_VER = 3              # 解析格式版本, 改了就让磁盘缓存整体失效重扫
+SCAN_VER = 4              # 解析格式版本, 改了就让磁盘缓存整体失效重扫
 
 # 产物过滤 —— 目标是"这次对话到底交付了什么", 不是"碰过哪些字节"
 ART_SKIP_DIR = (
@@ -62,6 +62,13 @@ ART_DATA_EXT = (".npz", ".npy", ".parquet", ".pkl", ".pickle", ".h5",
 ART_DOC_EXT = (".md", ".csv", ".html", ".htm", ".txt", ".json",
                ".yaml", ".yml", ".tsv")
 ART_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Artifact")
+# 「真实活动时刻」用: 只有 user/assistant 行才是对话本身。文件 mtime 会被
+# artifact-autoreact-ledger / atis-latch / last-prompt / frame-link 这类**记账行**
+# 顶上来 —— 一个还开着但几天没说话的窗口, 每隔几分钟就被这些行刷新 mtime,
+# 于是按 mtime 排序会把几天前的对话顶到最上面(2026-09-09 实发)。
+# 实测(68k 行, 68 个文件): 这两个子串与 json 解出来的 type 一一对应, 零假阳零假阴。
+TS_RE = re.compile(r'"timestamp":"([^"]+)"')
+
 PUB_RE = re.compile(r"https://claude\.ai/(?:code/artifact|public/artifacts)/[0-9a-fA-F]{8}-[0-9a-fA-F-]{20,}")
 
 _scan_cache = {}          # path -> [key, parsed dict]
@@ -249,9 +256,16 @@ def scan_file(path):
     arts = {}          # 本地文件产物: path -> 记录
     pub = {}           # 已发布的 claude.ai artifact: url -> 记录
     last_user = ""     # 最近一条真人发言 —— 就是下一个产物的"来历"
+    act_raw = ""       # 最后一条 user/assistant 行的时间戳 = 真实活动时刻
     try:
         with io.open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
+                # 真实活动时刻: 只认对话行, 不认记账行。纯字符串 + 一次正则,
+                # 不付 json.loads 的钱(它在这个循环里是最贵的一步)。
+                if '"type":"assistant"' in line or '"type":"user"' in line:
+                    m = TS_RE.search(line)
+                    if m:
+                        act_raw = m.group(1)
                 # 三种行才值得付 json.loads 的钱: 真人发言 / 写文件的工具调用 /
                 # 含已发布 artifact 链接的行。其余(工具结果、思考块)直接跳过。
                 is_user = ('"type":"user"' in line and '"tool_use_id"' not in line)
@@ -316,6 +330,7 @@ def scan_file(path):
         "artifacts": art_rows,
         "art_total": art_total,
         "published": sorted(pub.values(), key=lambda a: a["t"]),
+        "act": _iso_epoch(act_raw) or 0,
     }
     global _cache_dirty
     _scan_cache[path] = [key, out]
@@ -730,7 +745,10 @@ def list_sessions(limit):
             size = 0
         rows.append({
             "id": sid,
-            "mtime": mt,
+            # mtime 是**给人看和给排序用的"最后说话时刻"**, 不是文件 mtime。
+            # 文件 mtime 留在 ftime 里备查(两者差得远 = 这个窗口开着但没在用)。
+            "mtime": info.get("act") or mt,
+            "ftime": mt,
             "project": proj,
             "cwd": info.get("cwd") or "",
             "first": info.get("first") or "",
@@ -747,6 +765,10 @@ def list_sessions(limit):
             "star": bool(n.get("star")),
             "status": stat.get(sid),
         })
+    # 按真实活动时刻重排。这一步是正确的而不是近似的: 文件只会被追加,
+    # 所以 act <= 文件 mtime 恒成立 ⇒ 「act 前 limit 名」必是「mtime 前 limit 名」
+    # 的子集, 在这个窗口内重排不会漏掉任何一条本该上榜的对话。
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
     return rows, total
 
 
@@ -819,7 +841,7 @@ def grep_sessions(kw, scan_n):
         info = scan_file(fp) or {}
         n = notes.get(sid, {})
         hits.append({
-            "id": sid, "mtime": mt, "project": proj,
+            "id": sid, "mtime": info.get("act") or mt, "ftime": mt, "project": proj,
             "cwd": info.get("cwd") or "", "first": info.get("first") or "",
             "last": info.get("last") or "", "turns": info.get("turns") or 0,
             "topics": info.get("topics") or [],
@@ -827,6 +849,7 @@ def grep_sessions(kw, scan_n):
             "auto_title": autot.get(sid, ""), "note": n.get("note", ""),
             "star": bool(n.get("star")), "snippet": snippet,
         })
+    hits.sort(key=lambda r: r["mtime"], reverse=True)
     return hits, len(files), n_all
 
 

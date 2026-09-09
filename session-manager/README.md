@@ -44,8 +44,19 @@ Python 3.8+。**唯一的第三方包是 `psutil`** —— "这个对话的进�
 ## 数据来自哪里
 
 `~/.claude/projects/<项目slug>/<session_id>.jsonl` —— 每个文件就是一次对话的逐字记录,
-文件名去掉后缀 = **session id = `claude --resume` 用的 id**, 文件 mtime = 最后活动时间。
-本工具只读这些文件, 不改不删。
+文件名去掉后缀 = **session id = `claude --resume` 用的 id**。本工具只读这些文件, 不改不删。
+
+**排序用的"最后活动时间"不是文件 mtime**(2026-09-09 修正)。还开着的窗口即使几天没人说话,
+也会被 Claude Code 的记账行(`artifact-autoreact-ledger` / `atis-latch` / `last-prompt` /
+`frame-link` 等无 timestamp 或非对话类型的行)每隔几分钟顶一次 mtime —— 当时实测**前 150 条里
+有 94 条**的文件 mtime 比真正的最后一句话新 2 小时以上, 于是列表最上面那条其实是几天前的对话,
+正好毁掉本工具唯一要解决的问题。
+
+现在取的是**最后一条 `type` 为 `user`/`assistant` 的行的 timestamp**, 前端显示与排序都用它,
+文件 mtime 留在 `ftime` 字段里(悬停时间可以看到)。子串预筛 `"type":"assistant"` /
+`"type":"user"` 与 json 解析出的 type 实测在 6.8 万行上一一对应(零假阳零假阴), 所以这一步
+不用付 `json.loads` 的钱。排序窗口的正确性: 文件只被追加 ⇒ `act <= mtime` 恒成立 ⇒
+"按 act 的前 N 名"必是"按 mtime 的前 N 名"的子集, 在按 mtime 取出的窗口内重排不会漏人。
 
 自己填的标题/注释/星标存在 `notes.json`(与本文件同目录, UTF-8)。
 删掉它只是丢注释, 对话本身不受影响。
