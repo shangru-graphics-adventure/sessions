@@ -142,6 +142,7 @@ async function handle(req, res) {
       vscode: vscode.version,
       pid: process.pid,
       windowTitle: (vscode.workspace.workspaceFolders || []).map((f) => f.name),
+      routes: ["terminals", "new", "rename", "place", "show", "close", "type"],
     });
   }
   if (url === "/terminals") {
@@ -213,6 +214,21 @@ async function handle(req, res) {
     const t = await findByPid(pid);
     if (!t) return json(res, 200, { ok: false, why: "这个窗口里没有 pid 为 " + pid + " 的终端" });
     return json(res, 200, await placeTerminal(t, where));
+  }
+  if (url === "/type") {
+    // 往一个已有终端里打一行字并回车(给空闲的 claude 对话发文字: 对话管理器的发送框、ticketdesk 的回答 / 回复)。
+    // 调用方负责先确认: 这个终端的 shell 底下正跑着一个 status=idle 的 claude 进程。
+    // 这里再卡两条: 只收单行、≤4000 字; 而且必须以「【」开头(调用方的消息头), 不像一条 shell 命令。
+    const body = await readBody(req);
+    const pid = Number(body.pid);
+    const text = String(body.text || "");
+    if (!pid || !text) return json(res, 400, { ok: false, why: "need pid and text" });
+    if (text.indexOf("\n") >= 0 || text.indexOf("\r") >= 0 || text.length > 4000) return json(res, 400, { ok: false, why: "只收单行且 ≤4000 字" });
+    if (!text.startsWith("【")) return json(res, 400, { ok: false, why: "消息必须以【开头" });
+    const t = await findByPid(pid);
+    if (!t) return json(res, 200, { ok: false, why: "这个窗口里没有 pid 为 " + pid + " 的终端" });
+    t.sendText(text, true);
+    return json(res, 200, { ok: true, typed: t.name });
   }
   if (url === "/show" || url === "/close") {
     const body = await readBody(req);
