@@ -57,6 +57,59 @@ async function findByPid(pid) {
   return null;
 }
 
+const DIVIDER = "──────── ▲ 在跑　▼ 等你回答 ────────";
+let placing = Promise.resolve();                  // 串行: 两个对话同时结束时不让挪动交错
+
+function findDivider() {
+  return vscode.window.terminals.find((x) => x.name === DIVIDER) || null;
+}
+
+function ensureDivider() {
+  let d = findDivider();
+  if (d) return d;
+  const em = new vscode.EventEmitter();
+  const pty = {
+    onDidWrite: em.event,
+    open: () => em.fire("\x1b[2m这是分割线, 不是对话。上面: 还在跑的 Claude 对话; 下面: 等你回答的。由 Claude Sessions Bridge 自动维护。\x1b[0m\r\n"),
+    close: () => {},
+    handleInput: () => {},
+  };
+  d = vscode.window.createTerminal({ name: DIVIDER, pty: pty });
+  return d;
+}
+
+async function moveToEnd(t) {
+  t.show(true);
+  await vscode.commands.executeCommand("workbench.action.terminal.moveToEditor");
+  await vscode.commands.executeCommand("workbench.action.terminal.moveToTerminalPanel");
+}
+
+// vscode.window.terminals 的顺序不保证等于面板显示顺序, 所以自己记「分割线下面有谁」(按挪下去的先后)。
+// 面板顺序 = 分割线以上(没进名单的) + 分割线 + waiting(按名单顺序), 每次挪动都维持这个不变式。
+const waiting = [];
+
+function placeTerminal(t, where) {
+  const job = placing.then(async () => {
+    const prev = vscode.window.activeTerminal;
+    const fresh = !findDivider();
+    const d = ensureDivider();
+    if (fresh) await new Promise((r) => setTimeout(r, 150));   // 新建的分割线排在末尾 = 此刻所有终端都在它上面
+    let moved = 0;
+    const i = waiting.indexOf(t);
+    if (where === "below") {
+      if (i < 0) { await moveToEnd(t); moved++; waiting.push(t); }
+    } else if (i >= 0 || where === "above-new") {
+      if (i >= 0) waiting.splice(i, 1);
+      await moveToEnd(d); moved++;
+      for (const x of waiting) { await moveToEnd(x); moved++; }
+    }
+    if (prev && prev !== d && moved) prev.show(false);
+    return { ok: true, where: where, moved: moved, waiting: waiting.map((x) => x.name) };
+  });
+  placing = job.catch(() => {});
+  return job.catch((e) => ({ ok: false, why: String(e) }));
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let buf = "";
@@ -84,6 +137,7 @@ async function handle(req, res) {
     return json(res, 200, {
       ok: true,
       what: "claude-sessions-bridge",
+      resumeProviders: ["claude", "codex"],
       version: "0.1.0",
       vscode: vscode.version,
       pid: process.pid,
@@ -104,8 +158,9 @@ async function handle(req, res) {
     // 只能干一件事的接口, 出问题时的排查成本低得多。
     const body = await readBody(req);
     const cmd = String(body.cmd || "");
-    if (!/^claude(\s|$)/.test(cmd)) {
-      return json(res, 400, { ok: false, why: "这个接口只用来起 claude" });
+    const codexResume = /^codex resume [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(cmd);
+    if (!/^claude(\s|$)/.test(cmd) && !codexResume) {
+      return json(res, 400, { ok: false, why: "只允许启动 claude 或 codex resume <UUID>" });
     }
     let opts = { name: String(body.name || "claude") };
     if (body.cwd) opts.cwd = String(body.cwd);
@@ -124,6 +179,40 @@ async function handle(req, res) {
       pid = null;
     }
     return json(res, 200, { ok: true, pid: pid, name: t.name });
+  }
+  if (url === "/rename") {
+    // 把某个终端标签改名(例如改成 Claude 会话名, 形如 <用户名>-e9)。
+    // VS Code 没有直接给 Terminal 改名的 API, 只能先让它成为活动终端, 再执行内置命令
+    // workbench.action.terminal.renameWithArg。preserveFocus 保证不抢键盘焦点。
+    const body = await readBody(req);
+    const pid = Number(body.pid);
+    const name = String(body.name || "").slice(0, 60);
+    if (!pid || !name) return json(res, 400, { ok: false, why: "need pid and name" });
+    const t = await findByPid(pid);
+    if (!t) return json(res, 200, { ok: false, why: "这个窗口里没有 pid 为 " + pid + " 的终端" });
+    const before = t.name;
+    try {
+      t.show(true);
+      await vscode.commands.executeCommand("workbench.action.terminal.renameWithArg", { name: name });
+    } catch (e) {
+      return json(res, 200, { ok: false, why: "改名失败: " + String(e) });
+    }
+    return json(res, 200, { ok: true, from: before, to: t.name });
+  }
+  if (url === "/place") {
+    // 用户 2026-10-03: 一个空的分割线终端, 上面 = 还在跑的对话, 下面 = 等用户回答的对话。
+    // VS Code 没有给终端标签排序的 API; 已知可用的是 moveToEditor + moveToTerminalPanel:
+    // 移回面板的终端排到列表末尾。所以:
+    //   below(到分割线下): 把它移到末尾;
+    //   above(回分割线上): 依次把 分割线 + 分割线下面除它以外的终端 移到末尾。
+    // 挪完把原来的活动终端 show() 回来(尽量不打断正在打字的那个标签)。
+    const body = await readBody(req);
+    const pid = Number(body.pid);
+    const where = String(body.where || "below");
+    if (!pid) return json(res, 400, { ok: false, why: "need pid" });
+    const t = await findByPid(pid);
+    if (!t) return json(res, 200, { ok: false, why: "这个窗口里没有 pid 为 " + pid + " 的终端" });
+    return json(res, 200, await placeTerminal(t, where));
   }
   if (url === "/show" || url === "/close") {
     const body = await readBody(req);
@@ -187,6 +276,15 @@ function stop() {
 function activate(context) {
   start(context);
   context.subscriptions.push(
+    // 新开的终端默认排在末尾 = 分割线下面; 它是新对话(在跑), 挪回分割线上面
+    vscode.window.onDidOpenTerminal((t) => {
+      if (t.name === DIVIDER || !findDivider()) return;
+      setTimeout(() => placeTerminal(t, "above-new"), 400);
+    }),
+    vscode.window.onDidCloseTerminal((t) => {
+      const i = waiting.indexOf(t);
+      if (i >= 0) waiting.splice(i, 1);
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("claudeSessionsBridge")) start(context);
     }),

@@ -1,0 +1,4 @@
+*.log
+first_prompt_state/
+turn_notify_noplace
+__pycache__/
