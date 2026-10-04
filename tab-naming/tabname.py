@@ -84,8 +84,23 @@ def bridges():
 
 
 def rename(term_pid, name):
-    """挨个桥问; 只有拥有该终端的那个窗口会 ok。→ (ok, 说明)"""
+    """10-04 起改控制台标题(同目录 tab_title.py): 不切标签、不闪, 等你时自动带「▶ 」。
+    VS Code API 改过名的老标签是静态的, 控制台标题改不动它 —— 那种情况退回桥的 /rename(会切一下标签)。→ (ok, 说明)"""
     if not term_pid: return False, "没有终端 pid"
+    sid = next((k for k, v in live_sessions().items() if v.get("shell_pid") == int(term_pid)), None)
+    if sid:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import tab_title
+        ok, info = tab_title.apply(sid, None, name)
+        cur = term_name(int(term_pid)) or ""
+        if ok and cur.replace(tab_title.MARK, "").strip() == name.strip(): return True, "控制台标题 → " + cur
+        if not os.environ.get("TABNAME_API"): return False, "标签是 API 静态名(旧), 控制台标题改不动, 为免闪动不再用 API 改(当前 %s; 要强改设 TABNAME_API=1)" % cur
+    if not os.environ.get("TABNAME_API"): return False, "终端 %s 下没有活着的 claude 会话" % term_pid
+    return rename_api(term_pid, name)
+
+
+def rename_api(term_pid, name):
+    """旧法: 挨个桥问; 只有拥有该终端的那个窗口会 ok。会切一下标签(面板闪), 且之后标签变静态。→ (ok, 说明)"""
     why = []
     for port in bridges():
         req = urllib.request.Request("http://127.0.0.1:%d/rename" % port, method="POST", headers={"Content-Type": "application/json"},
@@ -127,7 +142,7 @@ def cmd_handoff(a):
     if a.term_pid:                                                   # 新会话还没起来: 后台等它写出 sessions/<pid>.json 再改名
         pyw = Path(sys.executable).with_name("pythonw.exe")
         subprocess.Popen([str(pyw if pyw.exists() else sys.executable), __file__, "claim", "--chain", cid, "--ver", str(nv),
-                          "--term-pid", str(a.term_pid), "--after", str(time.time() - 5)],
+                          "--term-pid", str(a.term_pid), "--after", str(time.time() - 5), "--old-sid", a.sid],
                          creationflags=NOWIN | getattr(subprocess, "DETACHED_PROCESS", 0), close_fds=True)
         ok2, info2 = rename(a.term_pid, label(c["topic"], nv, True, "启动中", ""))
         print("新窗口先改名(待认领):", ok2, info2)
@@ -146,9 +161,43 @@ def cmd_claim(a):
                     c["members"].append({"sid": sid, "name": s.get("name"), "ver": a.ver, "ts": time.time()}); save(d)
                 ok, info = rename(a.term_pid, label(c["topic"], a.ver, True, s.get("name"), sid))
                 with open(log, "a", encoding="utf-8") as f: f.write("%s claim %s v%d %s %s %s\n" % (time.strftime("%H:%M:%S"), a.chain, a.ver, sid, ok, info))
+                if getattr(a, "old_sid", None): close_old(a.old_sid, sid, log)
                 return
         time.sleep(2)
     with open(log, "a", encoding="utf-8") as f: f.write("%s claim %s v%d 超时: 终端 %s 下 180 s 内没有新会话\n" % (time.strftime("%H:%M:%S"), a.chain, a.ver, a.term_pid))
+
+
+KEEP_OLD = Path.home() / ".claude" / "handoff_keep_old"      # 存在这个文件 = 交接后不关旧对话
+
+
+def close_old(old_sid, new_sid, log):
+    """用户 2026-10-04:「以后handoff后，自动关闭上一个旧的对话」。
+    新会话认领后, 等旧会话把交接这一轮说完(状态回到 idle 并持续 8 s), 再经桥 /close 关旧终端标签(dispose, 进程随之结束)。
+    旧会话 30 分钟内一直没空闲(用户还在旧窗口聊) → 不关; 新会话不在了 → 不关。旧会话记录仍在磁盘, 可 claude --resume 找回。"""
+    def w(m):
+        with open(log, "a", encoding="utf-8") as f: f.write("%s close_old %s %s\n" % (time.strftime("%H:%M:%S"), old_sid[:8], m))
+    if KEEP_OLD.exists(): return w("跳过: 存在 %s" % KEEP_OLD)
+    deadline = time.time() + 1800; idle_since = None; old = None
+    while time.time() < deadline:
+        live = live_sessions(); old = live.get(old_sid)
+        if not old: return w("旧会话已不在, 不用关")
+        if new_sid not in live: return w("新会话 %s 不在了, 不关旧的" % new_sid[:8])
+        if old.get("status") == "idle":
+            idle_since = idle_since or time.time()
+            if time.time() - idle_since >= 8: break
+        else:
+            idle_since = None
+        time.sleep(2)
+    else:
+        return w("30 分钟内旧会话一直在忙, 不关")
+    sp = old.get("shell_pid")
+    for port in bridges():
+        req = urllib.request.Request("http://127.0.0.1:%d/close" % port, data=json.dumps({"pid": sp}).encode(), headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=4) as r: d = json.loads(r.read().decode("utf-8"))
+        except Exception as ex: d = {"ok": False, "why": repr(ex)}
+        if d.get("ok"): return w("已关闭终端 %s (port %d): %s" % (sp, port, d.get("closed")))
+    w("没有桥认领终端 %s, 未关" % sp)
 
 
 def cmd_refresh(a):
@@ -198,7 +247,7 @@ def cmd_autotitle(a):
         if s and s.get("shell_pid") and user_msgs(a.sid, n=1):
             n = term_name(s["shell_pid"])
             if n is None: return note("没有 VS Code 桥认领这个终端(不在 VS Code 里?), 跳过")
-            if "[" in n: return note("标签已有 [ ], 跳过: " + n)
+            if "[" in n and strip_spin(n.split(" [")[0].replace("▶", "")).lower() not in GENERIC and not n.replace("▶", "").strip().startswith("～"): return note("标签已有名字, 跳过: " + n)   # ～开头 = 提问时起的临时名, 照样换
             t, src = best_title(a.sid, n)
             if t and t not in ("未命名对话",):
                 ok, info = rename(s["shell_pid"], "%s [%s(%s)]" % (t[:40], s.get("name") or "?", a.sid[:8]))
@@ -237,8 +286,8 @@ def handoff_title(prompt):
         h1 = next((l for l in Path(h.group(1)).read_text(encoding="utf-8").splitlines() if l.startswith("# ")), "")
         t = re.sub(r"^#\s*(交接|HANDOFF)\s*[0-9:\- _]*", "", h1).strip(" —-")
         t = re.sub(r"^.*?——\s*", "", t) if "——" in t else t
-        t = re.sub(r"[（(]会话 ?[0-9a-f]{8}[^）)]*[）)]", "", t)          # 去「（会话 abcd1234，…）」
-        t = re.sub(r"^会话 ?[0-9a-f]{8}\s*[（(]?", "", t).strip()       # 去开头「会话 abcd1234（」
+        t = re.sub(r"[（(]会话 ?[0-9a-f]{8}[^）)]*[）)]", "", t)          # 去「（会话 de177373，…）」
+        t = re.sub(r"^会话 ?[0-9a-f]{8}\s*[（(]?", "", t).strip()       # 去开头「会话 7bfac852（」
         t = re.sub(r"^[：:\s]+", "", t).rstrip("）) ")
         return t[:28]
     except Exception:
@@ -264,11 +313,11 @@ def user_msgs(sid, n=15, each=200):
                 if isinstance(c, list): c = " ".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
                 if not isinstance(c, str): continue
                 c = c.strip()
-                if c.startswith("<command-name>"):
+                if "<command-name>" in c[:300]:                       # 斜杠命令记录有时以 <command-message> 开头
                     m = re.search(r"<command-args>(.*?)</command-args>", c, re.S)
                     cn = re.search(r"<command-name>(.*?)</command-name>", c)
                     c = ((cn.group(1) + " ") if cn else "") + (m.group(1).strip() if m else "")
-                    if not m or not m.group(1).strip(): continue
+                    c = c.strip()                                          # 不带参数的斜杠命令(/material-edge)也留着: 配合第一轮回答能起名(10-04)
                 elif c.startswith("<") or c.startswith("[Request interrupted") or c.startswith("Caveat:"): continue
                 if "HANDOFF_START_" in c:                                      # 交接起始句无信息: 换成交接文件标题 + 第 6 节第一项
                     ht = handoff_title(c); nx = handoff_next(c)
@@ -279,11 +328,35 @@ def user_msgs(sid, n=15, each=200):
     return out
 
 
+def first_reply(sid, each=800):
+    """第一轮回答的最后一段文字(本轮结束 turn_duration 之前最后一条助手文字)。10-04 用户:「应该在第一次回答结束的时候，才去更新标题」——
+    第一句常是「请读取 X」「另外这里…」, 只看提问起不出名字; 第一轮回答说清了在干什么。"""
+    hits = list((Path.home() / ".claude" / "projects").glob("*/%s.jsonl" % sid))
+    last = ""
+    if not hits: return ""
+    try:
+        with open(hits[0], encoding="utf-8", errors="replace") as f:
+            for l in f:
+                try: r = json.loads(l)
+                except Exception: continue
+                if r.get("isSidechain"): continue
+                if r.get("type") == "assistant":
+                    c = (r.get("message") or {}).get("content")
+                    if isinstance(c, list):
+                        t = " ".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text").strip()
+                        if t: last = t
+                elif r.get("type") == "system" and r.get("subtype") == "turn_duration" and last: break
+    except Exception: pass
+    return last[:each]
+
+
 def concise_title(sid, timeout=90):
     """claude -p --model haiku 按 tab_prompt.txt 起 ≤12 字标签名; 失败返回 ""。约 20 s(CLI 冷启动)。"""
     msgs = user_msgs(sid)
     if not msgs: return ""
     p = TAB_PROMPT.read_text(encoding="utf-8") + chr(10) + chr(10).join("- " + m.replace(chr(10), " ") for m in msgs)
+    rep = first_reply(sid)
+    if rep: p += chr(10) + chr(10) + "助手第一次回答(节选, 用来判断这个对话实际在干什么):" + chr(10) + rep.replace(chr(10), " ")
     cmd = ["claude", "-p", "--model", "haiku", "--strict-mcp-config", "--mcp-config", str(TITLER / "empty_mcp.json"),
            "--settings", str(TITLER / "empty_settings.json"), "--system-prompt", "你是一个标签名生成器。只输出标签名本身，不做任何其他事，不使用任何工具。"]
     try:
@@ -350,7 +423,7 @@ def cmd_show(a):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("handoff"); p.add_argument("--sid", required=True); p.add_argument("--topic", required=True); p.add_argument("--term-pid", type=int)
-    p = sp.add_parser("claim"); p.add_argument("--chain", required=True); p.add_argument("--ver", type=int, required=True); p.add_argument("--term-pid", type=int, required=True); p.add_argument("--after", type=float, required=True)
+    p = sp.add_parser("claim"); p.add_argument("--chain", required=True); p.add_argument("--ver", type=int, required=True); p.add_argument("--term-pid", type=int, required=True); p.add_argument("--after", type=float, required=True); p.add_argument("--old-sid")
     sp.add_parser("refresh"); sp.add_parser("show")
     p = sp.add_parser("autotitle"); p.add_argument("--sid", required=True)
     p = sp.add_parser("nameall"); p.add_argument("--force", action="store_true")

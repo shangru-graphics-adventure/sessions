@@ -3,5 +3,30 @@
   "claude_home": "~/.claude",
   "recap_dir": "~/session_recaps",
   "archive_dirs": [],
-  "project_roots": ["~"]
+  "project_roots": [
+    "~"
+  ],
+  "outline_model": "haiku",
+  "xref": [
+    {
+      "name": "Jira issue",
+      "re": "\bPROJ-\\d+\b",
+      "url": "https://jira.example.com/browse/{0}"
+    },
+    {
+      "name": "ticketdesk",
+      "re": "\b[TPK]\\d{3}\b",
+      "url": "http://127.0.0.1:8750/#{0}"
+    },
+    {
+      "name": "glossary",
+      "gloss": "~/my_glossary.json",
+      "skip": [
+        "_plain"
+      ]
+    }
+  ],
+  "relay_dir": "",
+  "md_js": "",
+  "chain_meta": ""
 }

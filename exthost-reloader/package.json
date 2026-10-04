@@ -1,0 +1,13 @@
+{
+  "name": "exthost-reloader",
+  "displayName": "Extension Host Reloader (local)",
+  "description": "Restarts the VS Code extension host when ~/.claude/scripts/vscode_reload_request appears (terminals survive). Lets local scripts load updated local extensions without a manual Developer: Restart Extension Host.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "private": true,
+  "license": "MIT",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js"
+}

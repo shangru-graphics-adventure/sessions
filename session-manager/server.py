@@ -21,6 +21,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 import config                             # 本机配置(端口/路径), 见 config.py
+import replay                             # 完整回放(公开版, 2026-09-09 加)
 import advisor                            # 「建议」的复盘生成, 见 advisor.py
 import actions                            # 窗口定位与按键注入
 from preview import preview_html, reveal   # 产物预览/定位, 见 preview.py
@@ -40,13 +41,18 @@ IGNORE_PROJ = {config.project_slug(os.path.join(HERE, "titler"))}
 SELF_PROMPT_HEAD = "下面是一个 Claude Code 对话"
 CACHE_PATH = os.path.join(HERE, "cache.json")
 STATE_DIR = os.path.join(HERE, "state")     # hook_state.py 每会话写一个
+try:                                        # 在跑/等你 与 VS Code 标签 ▶ 同源 + 事件推送(~/.claude/scripts/turn_push.py, 与本机其他看板共用; 用户 10-04)
+    sys.path.insert(0, os.path.join(os.path.expanduser("~"), ".claude", "scripts"))
+    import turn_push
+except Exception:                           # 公开版 / 别的机器没有它: 状态照旧, 前端退回 2 s 轮询
+    turn_push = None
 PORT = config.PORT
 
 MAX_TOPICS = 14           # 每个对话最多提取多少个"话题"
 TOPIC_CHARS = 46          # 每个话题截多长
 MAX_ARTIFACTS = 40        # 每个对话最多列多少个产物(超出只报数)
 WHY_CHARS = 78            # "这文件怎么来的"截多长
-SCAN_VER = 4              # 解析格式版本, 改了就让磁盘缓存整体失效重扫
+SCAN_VER = 6              # (10-04 → 5: 话题跳过 isMeta 注入) 解析格式版本, 改了就让磁盘缓存整体失效重扫
 
 # 产物过滤 —— 目标是"这次对话到底交付了什么", 不是"碰过哪些字节"
 ART_SKIP_DIR = (
@@ -97,6 +103,88 @@ FILLER = {
     "确认", "谢谢", "算了", "ok", "okay", "yes", "y", "n", "no", "go", "同意",
     "继续做", "接着", "然后呢", "嗯嗯", "对的", "是的", "不用", "不要",
 }
+
+
+# ---------------------------------------------------------------- 兜底标题(用户 10-04)
+# 用户:「claude对话管理器仍然有很多"请读取"这种标题，没法一眼看出这个对话的目的」。
+# 没手填标题、也没 haiku 标题时, 以前直接把第一句当占位 —— 交接/拉起的对话第一句都是「请读取 X.md 并严格照其中的步骤做」。
+# 现在依次取: VS Code 标签名(~/.claude/tab_labels.json) → 交接链话题(config.json 的 "chain_meta", 可不配)
+#            → 「请读取 X.md」里 X 的标题(交接文件取 tabname.handoff_title, 其余取 H1) → 空(页面再退回第一句)。
+_LB = {"files": {}, "md": {}}
+_TAB_LABELS = os.path.join(os.path.expanduser("~"), ".claude", "tab_labels.json")
+_QA_META = config._cfg.get("chain_meta") or ""      # 别的看板记的交接链 {chains:{…}}; 没配就跳过这一级
+_GENERIC = {"claude", "claude code", "claude handoff", ""}
+_READ_RE = re.compile(r"请读取\s*`?([A-Za-z]:[^\s`\"']+?\.md)")
+
+
+def _json_cached(path):
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return {}
+    c = _LB["files"].get(path)
+    if c and c[0] == mt:
+        return c[1]
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except Exception:
+        d = {}
+    _LB["files"][path] = (mt, d)
+    return d
+
+
+def _md_title(path):
+    if path in _LB["md"]:
+        return _LB["md"][path]
+    t = ""
+    if "HANDOFF_START_" in path:
+        try:
+            sys.path.insert(0, os.path.join(os.path.expanduser("~"), ".claude", "skills", "handoff"))
+            import tabname
+            h = tabname.handoff_title("请读取 " + path)
+            if len(h) < 4:                                   # H1 只写了时间(「交接 2026-10-02 12:45 ET」): 改用第 6 节第一条下一步
+                h = tabname.handoff_next("请读取 " + path)[:28] or h
+            t = "接手: " + h if h else ""
+        except Exception:
+            t = ""
+    if not t:
+        try:
+            with io.open(path, encoding="utf-8", errors="replace") as fh:
+                h1 = next((l for l in fh if l.startswith("# ")), "")
+            t = re.sub(r"[（(][^）)]*[）)]", "", h1[2:]).strip()
+        except Exception:
+            t = ""
+    t = t or os.path.splitext(os.path.basename(path))[0]
+    _LB["md"][path] = t
+    return t
+
+
+def smart_label(sid, first):
+    v = _json_cached(_TAB_LABELS).get(sid)
+    v = (v.get("label") or "") if isinstance(v, dict) else (v or "")
+    v = re.sub(r"\s*\[[^\[\]]*\]\s*$", "", v.replace("\u25b6", "").strip()).strip()
+    if v.lower() not in _GENERIC:
+        return v
+    for c in ((_json_cached(_QA_META) if _QA_META else {}).get("chains") or {}).values():
+        for m in c.get("members") or []:
+            if m.get("sid") == sid and c.get("topic"):
+                return "%s v%s" % (c["topic"], m.get("ver"))
+    m = _READ_RE.search(first or "")
+    return _md_title(m.group(1)) if m else ""
+
+
+def outline_title(sid):
+    """话题脉络顺带生成的具体标题(10-04 用户「现有的标题还是太过模糊笼统…提及说具体干了什么，20字左右」)。"""
+    return (_json_cached(os.path.join(STATE_DIR, "outline", sid + ".json")) or {}).get("title") or ""
+
+
+def tab_tag(sid):
+    """cmd/VS Code 标签名末尾的方括号「[1-最新, 会话名(id8)]」; 没有标签就给 id 前 8 位(用户「把1-最新，id什么的接在后面，如同cmd标题」)。"""
+    v = _json_cached(_TAB_LABELS).get(sid)
+    v = (v.get("label") or "") if isinstance(v, dict) else (v or "")
+    m = re.search(r"\[([^\[\]]*)\]\s*$", v)
+    return m.group(1) if m else sid[:8]
 
 
 # ---------------------------------------------------------------- notes 持久化
@@ -150,13 +238,26 @@ def save_notes(notes):
 
 # ---------------------------------------------------------------- jsonl 解析
 
+_CMD_RE = re.compile(r"<command-name>/?([^<]+)</command-name>.*?<command-args>(.*?)</command-args>", re.S)
+
+
+def _slash(t):
+    """带参数的斜杠命令(/goal 正文、/loop 5m …)是用户真说的话 —— 还原成「/goal 正文」(10-04 用户:「这里显示没有我的发言，其实有，只是设定了goal」)。
+    不带参数的(/clear、/compact)仍是命令壳, 原样返回(以 < 开头, 会被当成非人类输入)。"""
+    if t.startswith("<command-"):
+        m = _CMD_RE.search(t)
+        if m and m.group(2).strip():
+            return "/%s %s" % (m.group(1).strip(), m.group(2).strip())
+    return t
+
+
 def _text_of(msg):
     c = msg.get("content")
     if isinstance(c, str):
-        return c
+        return _slash(c.lstrip())
     if isinstance(c, list):
-        return "".join(b.get("text", "") for b in c
-                       if isinstance(b, dict) and b.get("type") == "text")
+        return _slash("".join(b.get("text", "") for b in c
+                              if isinstance(b, dict) and b.get("type") == "text").lstrip())
     return ""
 
 
@@ -282,7 +383,8 @@ def scan_file(path):
                     if not cwd:
                         cwd = d.get("cwd") or ""
                     t = _text_of(d.get("message", {}))
-                    if _is_real_user_text(t):
+                    # 10-04: isMeta = 系统注入(skill 正文、别的对话带话、Stop hook、额度重置续跑、跨对话通知), 不是我说的话
+                    if _is_real_user_text(t) and not d.get("isMeta"):
                         t = " ".join(t.split())
                         msgs.append(t)
                         # 壳文本不能当"来历" —— 否则每个产物的解释都变成同一句
@@ -444,6 +546,150 @@ def _tool_brief(inp, name):
                 v = os.path.basename(v)
             return v[:70]
     return ""
+
+
+_GOAL_CACHE = {}          # path -> {"off": 已读到的字节, "g": 最后一条 goal_status 摘要}
+_GOAL_LOCK = threading.Lock()
+
+
+def goal_state(path):
+    with _GOAL_LOCK:
+        return _goal_state(path)
+
+
+def _goal_state(path):
+    """对话开着 /goal 吗(10-04 用户「如果goal active的话，在对话管理器也显示」)。
+    来源: transcript 里 type=attachment / attachment.type=goal_status 的记录 —— 设定时写 met:false+sentinel,
+    停止钩子每判一次写 met:false+reason, 结束(终端里 /goal clear 或判定达成)写 met:true+sentinel。
+    所以「最后一条 met=false」= 还开着。增量读: 每个文件只读新增的字节。"""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    c = _GOAL_CACHE.get(path)
+    if c is None or size < c["off"]:
+        c = _GOAL_CACHE[path] = {"off": 0, "g": None}
+    if size > c["off"]:
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(c["off"])
+                buf = fh.read(size - c["off"])
+        except OSError:
+            return c["g"]
+        cut = buf.rfind(b"\n")
+        if cut < 0:
+            return c["g"]
+        c["off"] += cut + 1
+        for ln in buf[:cut].split(b"\n"):
+            if b'"goal_status"' not in ln:
+                continue
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            a = d.get("attachment") or {}
+            if a.get("type") != "goal_status":
+                continue
+            g = c["g"] if (c["g"] and not a.get("sentinel")) else {"n": 0}
+            g = dict(g, on=not a.get("met"), cond=(a.get("condition") or "")[:400],
+                     ts=d.get("timestamp") or "")
+            if a.get("sentinel"):
+                g["reason"] = ""
+                if a.get("met"):
+                    g["ended"] = True
+            else:
+                g["n"] = g.get("n", 0) + 1
+                g["reason"] = (a.get("reason") or "")[:400]
+            c["g"] = g
+    return c["g"]
+
+
+_BG_CACHE = {}            # path -> {"off": 已读字节, "started": {id: (epoch, kind)}, "done": set(ids)}
+_BG_LOCK = threading.Lock()
+_BG_START = (("Async agent launched successfully", "agent", re.compile(r"agentId: ([0-9a-z]+)")),
+             ("Command running in background with ID:", "shell", re.compile(r"with ID: ([0-9a-z]+)")),
+             ("Command did not complete within", "shell", re.compile(r"background \(ID: ([0-9a-z]+)\)")))
+_BG_DONE = re.compile(r"^\s*<task-notification>\s*<task-id>([0-9a-z]+)</task-id>")
+
+
+def _iso_epoch(s):
+    try:
+        import datetime as _dt
+        return _dt.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def bg_tasks(path, since=0.0, max_age=86400):
+    """这个对话还在跑的后台任务(10-04 用户「模型空闲可回话、但该对话仍有后台子 agent 或后台 shell 在跑」新状态)。
+    启动 = tool_result 正文以「Async agent launched successfully … agentId: X」/「Command running in background with ID: X」/
+    「Command did not complete within … (ID: X)」开头; 结束 = 以 <task-notification><task-id>X 开头的 queued_command 附件或用户消息。
+    只按结构认(看正文开头), 不全文搜 —— 对话里引用这些字样不会被当成任务。只算本进程启动(since)之后开的、24 h 以内的。
+    → [{"id", "kind": agent|shell, "age"}]"""
+    with _BG_LOCK:
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return []
+        c = _BG_CACHE.get(path)
+        if c is None or size < c["off"]:
+            c = _BG_CACHE[path] = {"off": 0, "started": {}, "done": set()}
+        if size > c["off"]:
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(c["off"])
+                    buf = fh.read(size - c["off"])
+            except OSError:
+                buf = b""
+            cut = buf.rfind(b"\n")
+            if cut >= 0:
+                c["off"] += cut + 1
+                for ln in buf[:cut].split(b"\n"):
+                    if not (b"background" in ln or b"Async agent" in ln or b"task-notification" in ln):
+                        continue
+                    try:
+                        d = json.loads(ln)
+                    except ValueError:
+                        continue
+                    ts = _iso_epoch(d.get("timestamp"))
+                    a = d.get("attachment") or {}
+                    if a.get("type") == "queued_command":
+                        m = _BG_DONE.match(str(a.get("prompt") or ""))
+                        if m:
+                            c["done"].add(m.group(1))
+                        continue
+                    if d.get("type") != "user":
+                        continue
+                    cont = (d.get("message") or {}).get("content")
+                    if isinstance(cont, str):
+                        m = _BG_DONE.match(cont)
+                        if m:
+                            c["done"].add(m.group(1))
+                        continue
+                    for b in cont if isinstance(cont, list) else []:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") == "text":
+                            m = _BG_DONE.match(str(b.get("text") or ""))
+                            if m:
+                                c["done"].add(m.group(1))
+                            continue
+                        if b.get("type") != "tool_result":
+                            continue
+                        rc = b.get("content")
+                        txt = rc if isinstance(rc, str) else " ".join(
+                            x.get("text", "") for x in (rc or []) if isinstance(x, dict))
+                        head = txt.lstrip()[:400]
+                        for pre, kind, rx in _BG_START:
+                            if head.startswith(pre):
+                                m = rx.search(head)
+                                if m:
+                                    c["started"][m.group(1)] = (ts, kind)
+                                break
+        now = time.time()
+        return [{"id": k, "kind": kind, "age": round(now - ts)}
+                for k, (ts, kind) in c["started"].items()
+                if k not in c["done"] and ts >= since - 5 and now - ts < max_age]
 
 
 def tail_activity(path, tail_bytes=160_000):
@@ -636,11 +882,32 @@ def status_map(with_activity=True):
     alive = alive_pids(all_pids(states))
     now = time.time()
     out = {}
+    turns = turn_push.states() if turn_push else {}
     for sid, rec in states.items():
         st = resolve_state(rec, alive)
+        if turn_push:
+            st = turn_push.manager_state(st, turns.get(sid), rec.get("ts"))
+        # 10-04 用户「开着等你和等你确认有什么区别；不如这样，几个类型：正在跑，等你选择，等你回复意见，可以关了」
+        # Notification 里「Claude is waiting for your input」只是空闲 60 s 的提醒, 不是要你选什么 —— 归回「这一轮结束」
+        if st == "waiting" and "waiting for your input" in (rec.get("note") or ""):
+            st = "done"
+        sub = ""
+        if st == "done":                          # 结束的这一轮: 等你回复意见 / 可以关了 —— 由话题脉络(Stop 后台 haiku)顺带判定
+            sub = "reply"
+            try:
+                op = os.path.join(STATE_DIR, "outline", sid + ".json")
+                if os.path.getmtime(op) >= (rec.get("ts") or 0) - 1:
+                    if (_json_cached(op) or {}).get("next") == "可以关了":
+                        sub = "closable"
+            except OSError:
+                pass
         wins = live_windows(rec, alive)
+        for w in wins:                            # VS Code 里显示标签自己的名字, 不显示 IDE 主窗口标题
+            if (w.get("owner") or w.get("term") or "").lower() == "code.exe":
+                tn = (actions.tab_names() or {}).get(w.get("shell_pid") or 0)
+                w["title"] = tn or "VS Code 标签"
         row = {
-            "state": st,
+            "state": st, "sub": sub,
             "goal": rec.get("goal", ""),
             "result": rec.get("result", ""),
             "note": rec.get("note", ""),
@@ -662,6 +929,20 @@ def status_map(with_activity=True):
                 row["act_brief"] = act["brief"]
                 row["act_ts"] = act["ts"]
                 row["act_age"] = round(now - act["ts"], 1) if act["ts"] else None
+                # 空闲但后台还有子 agent / shell 在跑 → sub = "bg"(只算当前 claude 进程启动之后开的)
+                if st == "done" and wins:
+                    pids = {w["pid"] for w in wins}
+                    since = max([e.get("pid_ctime") or 0 for e in rec_procs(rec) if e.get("pid") in pids] or [0])
+                    bg = bg_tasks(fp, since)
+                    if bg:
+                        row["sub"] = "bg"
+                        row["bg"] = bg
+                g = goal_state(fp)
+                if g and g.get("on"):
+                    row["goal_on"] = True
+                    row["goal_cond"] = g.get("cond", "")
+                    row["goal_reason"] = g.get("reason", "")
+                    row["goal_n"] = g.get("n", 0)
         out[sid] = row
     return out
 
@@ -760,8 +1041,8 @@ def list_sessions(limit):
             "turns": info.get("turns") or 0,
             "kb": round(size / 1024.0, 1),
             "title": n.get("title", ""),
-            "auto_title": autot.get(sid, ""),
-            "note": n.get("note", ""),
+            "auto_title": autot.get(sid, ""), "label": smart_label(sid, info.get("first") or ""),
+            "note": n.get("note", ""), "otitle": outline_title(sid), "tag": tab_tag(sid),
             "star": bool(n.get("star")),
             "status": stat.get(sid),
         })
@@ -846,7 +1127,7 @@ def grep_sessions(kw, scan_n):
             "last": info.get("last") or "", "turns": info.get("turns") or 0,
             "topics": info.get("topics") or [],
             "kb": 0, "title": n.get("title", ""),
-            "auto_title": autot.get(sid, ""), "note": n.get("note", ""),
+            "auto_title": autot.get(sid, ""), "label": smart_label(sid, info.get("first") or ""), "note": n.get("note", ""), "otitle": outline_title(sid), "tag": tab_tag(sid),
             "star": bool(n.get("star")), "snippet": snippet,
         })
     hits.sort(key=lambda r: r["mtime"], reverse=True)
@@ -888,49 +1169,374 @@ def conv_tree(sid):
         del cur["_a"]
         turns.append(cur)
 
+    bad = [0]
+    def one(d):
+        nonlocal cur
+        ty = d.get("type")
+        if ty == "attachment":   # 10-04: 它运算时我插的问题(queued_command), 记在当前这一轮下面
+            at = d.get("attachment") or {}
+            pt = at.get("prompt") if at.get("type") == "queued_command" else ""
+            if isinstance(pt, list):         # 10-04: 带截图的插问, prompt 是 [{type:text},{type:image}] —— 以前 .strip() 抛错, 把这一行之后的整份解析都静默丢了
+                pt = " ".join(b.get("text", "") if b.get("type") == "text" else "[图]" for b in pt if isinstance(b, dict))
+            pt = _slash(str(pt or "").strip())
+            if pt and cur is not None and _is_real_user_text(pt):
+                cur.setdefault("mid", []).append({"q": pt[:4000], "ts": at.get("timestamp") or d.get("timestamp", "")})
+            # 10-04: 对话在跑时网页发来、由钩子塞进上下文的消息(additionalContext「【…发来 N 条消息…】\n- [时刻] 来源：正文」), 也记成插问
+            if at.get("type") == "hook_additional_context" and cur is not None:
+                for blob in at.get("content") or []:
+                    if isinstance(blob, str) and blob.startswith("【") and "发来" in blob.split("\n", 1)[0]:
+                        for m in re.finditer(r"^- \[([^\]]+)\] ([^：\n]{1,20})：(.+)$", blob, re.M):
+                            cur.setdefault("mid", []).append({"q": m.group(3)[:4000], "ts": m.group(1), "via": m.group(2)})
+            return
+        if ty not in ("user", "assistant"):
+            return
+        if d.get("isSidechain"):
+            if cur is not None:
+                cur["sub"] += 1
+            return
+        msg = d.get("message") or {}
+        if ty == "user":
+            t = _text_of(msg).strip()
+            # 10-04: skill 正文 / 系统注入(isMeta 或 JUNK_PREFIX)不是我说的话 —— 以前被当成提问, 一整页 skill 挤成一段。
+            # skill 只在这一轮的工具流水里记一行
+            if d.get("isMeta") or t.startswith(JUNK_PREFIX):
+                m = re.search(r"Base directory for this skill: \S*?[\\/]skills[\\/]([^\\/\s]+)", t)
+                if m and cur is not None:
+                    cur["_a"].append("· 载入 skill " + m.group(1))
+                return
+            # 工具结果也是 type=user, 不是我说的话
+            if not t or not _is_real_user_text(t):
+                return
+            flush()
+            cur = {"q": t[:4000], "ts": d.get("timestamp", ""),     # 10-04: 保留换行, 前端按 Markdown 渲染
+                   "tools": 0, "sub": 0, "_a": []}
+            return
+        if cur is None:      # 极少数对话以 assistant 开头(--continue 拼接)
+            cur = {"q": "(这一轮前面没有我的发言)", "ts": d.get("timestamp", ""),
+                   "tools": 0, "sub": 0, "_a": []}
+        cur["end"] = d.get("timestamp", "") or cur.get("end", "")   # 10-04 A: 完成时刻 = 本轮最后一条 assistant 行; 想了多久 = end − ts(用户提问时刻)
+        for blk in msg.get("content") or []:
+            if not isinstance(blk, dict):
+                return
+            if blk.get("type") == "text":
+                cur["_a"].append(blk.get("text", ""))
+            elif blk.get("type") == "tool_use":
+                cur["tools"] += 1
+                cur["_a"].append(_tool_line(blk))
+
     try:
         with io.open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                if '"type":"user"' not in line and '"type":"assistant"' not in line:
+                if '"type":"user"' not in line and '"type":"assistant"' not in line and '"queued_command"' not in line and '"hook_additional_context"' not in line:
                     continue
                 try:
                     d = json.loads(line)
                 except Exception:
                     continue
-                ty = d.get("type")
-                if ty not in ("user", "assistant"):
-                    continue
-                if d.get("isSidechain"):
-                    if cur is not None:
-                        cur["sub"] += 1
-                    continue
-                msg = d.get("message") or {}
-                if ty == "user":
-                    t = _text_of(msg).strip()
-                    # 工具结果也是 type=user, 不是我说的话
-                    if not t or not _is_real_user_text(t):
-                        continue
-                    flush()
-                    cur = {"q": " ".join(t.split())[:4000], "ts": d.get("timestamp", ""),
-                           "tools": 0, "sub": 0, "_a": []}
-                    continue
-                if cur is None:      # 极少数对话以 assistant 开头(--continue 拼接)
-                    cur = {"q": "(这一轮前面没有我的发言)", "ts": d.get("timestamp", ""),
-                           "tools": 0, "sub": 0, "_a": []}
-                for blk in msg.get("content") or []:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("type") == "text":
-                        cur["_a"].append(blk.get("text", ""))
-                    elif blk.get("type") == "tool_use":
-                        cur["tools"] += 1
-                        cur["_a"].append(_tool_line(blk))
+                try:
+                    one(d)
+                except Exception:            # 10-04: 一行坏了只跳过这一行(以前整份解析静默中止, 截图插问之后全丢)
+                    bad[0] += 1
     except Exception:
         pass
     flush()
     total = len(turns)
     return {"turns": turns[-TREE_MAX_TURNS:], "total": total,
             "dropped": max(0, total - TREE_MAX_TURNS)}
+
+
+def tree_sse(h, sid, period=0.25, ping_s=15):
+    """SSE: 盯一个会话的 jsonl(大小+修改时刻)与在跑/等你状态(turn_push), 任一变化就发 event=tree。
+    每个连接每 0.25 s 两次 stat, 微秒级; 不读文件内容 —— 内容由浏览器收到事件后拉 /api/tree(大会话全量解析 17 ms, 10-04 实测)。"""
+    if not re.fullmatch(r"[0-9a-f-]{36}", sid or ""):
+        return h._send(404, {"error": "not found"})
+    path = find_transcript(sid)                   # 新开的对话第一句话之前没有 jsonl: 照样连上, 下面每 0.25 s 再找
+    h.send_response(200)
+    h.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    h.send_header("Cache-Control", "no-store")
+    h.end_headers()
+
+    def ver():
+        nonlocal path
+        if not path:
+            path = find_transcript(sid)
+        try:
+            st = os.stat(path); v = "%d:%d" % (st.st_size, st.st_mtime_ns)
+        except (OSError, TypeError):          # 新对话还没有 jsonl: path=None
+            v = "gone"
+        t = (turn_push.states().get(sid) or {}) if turn_push else {}
+        try:                                           # 话题脉络更新了也推
+            v += ":%d" % os.stat(os.path.join(STATE_DIR, "outline", sid + ".json")).st_mtime_ns
+        except OSError:
+            pass
+        return v + "|" + str(t.get("state")) + "|" + str(t.get("ts"))
+    last, idle = None, 0.0
+    try:
+        while True:
+            v = ver()
+            if v != last:
+                h.wfile.write(("event: tree\ndata: %s\n\n" % json.dumps({"v": v})).encode("utf-8")); h.wfile.flush()
+                last, idle = v, 0.0
+            elif idle >= ping_s:
+                h.wfile.write(b": ping\n\n"); h.wfile.flush(); idle = 0.0
+            time.sleep(period); idle += period
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+        return
+
+
+def xref_rules():
+    """config.json 的 "xref": [{name, re, url?, hover?} | {gloss: <json 文件路径>, skip: [键…]}] —— 本机私有, 不进公开版。"""
+    rules, gloss = [], {}
+    for r in config._cfg.get("xref", []):
+        if r.get("gloss"):
+            try:
+                with io.open(r["gloss"], encoding="utf-8") as fh:
+                    g = json.load(fh)
+                gloss.update({k: v for k, v in g.items() if isinstance(v, str) and not k.startswith("_") and k not in (r.get("skip") or [])})
+            except Exception:
+                pass
+            rules.append({"name": r.get("name", ""), "re": "(?!)"})      # 占位: 保持下标与 config 一致
+        else:
+            rules.append({k: r.get(k) for k in ("name", "re", "url") if r.get(k)} | {"hover": bool(r.get("hover"))})
+    return {"rules": rules, "gloss": gloss, "preview": True}
+
+
+_xref_cache = {}
+
+
+def xref_fetch(url, ttl=60):
+    """悬停数据: 只取本机(127.0.0.1/localhost)的 JSON, 缓存 60 s。"""
+    if not re.match(r"https?://(127\.0\.0\.1|localhost)(:\d+)?/", url):
+        return None
+    hit = _xref_cache.get(url)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=3) as r:
+            d = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        d = None
+    _xref_cache[url] = (time.time(), d)
+    return d
+
+
+def path_info(p, cwd=""):
+    """路径链接: 解析成绝对路径(相对路径按对话的 cwd), 报是否存在/文件夹, 并给出逐级上级目录。"""
+    p = (p or "").strip().strip("`'\"")
+    if not p:
+        return {}
+    p = os.path.expanduser(p)
+    cands = [p] if os.path.isabs(p) else [os.path.join(c, p) for c in (cwd, os.path.expanduser("~")) if c]
+    ab = None
+    for c in cands:
+        if os.path.exists(c):
+            ab = c; break
+    ab = os.path.normpath(ab or cands[0])
+    par, d = [], os.path.dirname(ab)
+    while d and len(par) < 12:
+        par.append(d)
+        nd = os.path.dirname(d)
+        if nd == d:
+            break
+        d = nd
+    ex = os.path.exists(ab)
+    return {"abs": ab, "exists": ex, "isdir": os.path.isdir(ab),
+            "size": os.path.getsize(ab) if ex and os.path.isfile(ab) else None, "parents": par[::-1]}
+
+
+# 10-04 用户「每个页面做一个到顶部、到底部的按钮」: 预览页(/file)也挂上(index.html 自带一份)
+JUMP_HTML = ('<div style="position:fixed;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:99">'
+             + "".join('<button title="%s" onclick="scrollTo({top:%s,behavior:&quot;instant&quot;})" style="width:34px;height:34px;'
+                       'border-radius:50%%;border:1px solid #888;background:#2228;color:#fff;font-size:15px;cursor:pointer">%s</button>'
+                       % (t, y, c) for t, y, c in (("到顶部", "0", "↑"), ("到底部", "document.body.scrollHeight", "↓")))
+             + "</div>")
+
+
+def _bridge_type(shell_pid, text):
+    """经 VS Code 桥(vscode-bridge 扩展) /type 往 pid=shell_pid 的终端打一行字并回车。8 个端口并行探。→ (ok, 说明)"""
+    import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
+
+    def ping(port):
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:%d/ping" % port, timeout=0.4) as r:
+                d = json.loads(r.read().decode("utf-8"))
+            return port if d.get("what") == "claude-sessions-bridge" and "type" in (d.get("routes") or []) else None
+        except Exception:
+            return None
+    with ThreadPoolExecutor(8) as ex:
+        ports = [x for x in ex.map(ping, range(config.VSCODE_BRIDGE_PORT, config.VSCODE_BRIDGE_PORT + config.VSCODE_BRIDGE_SPAN)) if x]
+    if not ports:
+        return False, "没找到带 /type 的 VS Code 桥(装 vscode-bridge 扩展; 改过扩展要 Reload Window)"
+    for port in ports:
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/type" % port, method="POST", headers={"Content-Type": "application/json"},
+                                         data=json.dumps({"pid": int(shell_pid), "text": text}).encode("utf-8"))
+            with urllib.request.urlopen(req, timeout=6) as r:
+                if json.loads(r.read().decode("utf-8")).get("ok"):
+                    return True, "port %d 已打字" % port
+        except Exception:
+            continue
+    return False, "各个 VS Code 窗口里都没找到这个终端(pid %s)" % shell_pid
+
+
+def _prompt_seen(sid, since):
+    """hook_state.py 写的 state/<sid>.json: 打字之后出现过任何钩子事件 = 对话真的收到了这句话。
+    (发之前对话是空闲的, 不会有别的事件; 只认 UserPromptSubmit 会漏 —— 它很快被随后的 PreToolUse 覆盖)"""
+    try:
+        with io.open(os.path.join(STATE_DIR, sid + ".json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return float(d.get("ts") or 0) >= since and d.get("last_event") not in (None, "SessionStart")
+    except Exception:
+        return False
+
+
+def _bridge_enter(shell_pid):
+    """经桥 /enter 只补一次回车(桥要 ≥ type3 版; 旧版没有这个路由 → 返回 False)。"""
+    import urllib.request
+    for port in range(config.VSCODE_BRIDGE_PORT, config.VSCODE_BRIDGE_PORT + config.VSCODE_BRIDGE_SPAN):
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/enter" % port, method="POST", headers={"Content-Type": "application/json"},
+                                         data=json.dumps({"pid": int(shell_pid)}).encode("utf-8"))
+            with urllib.request.urlopen(req, timeout=2) as r:
+                if json.loads(r.read().decode("utf-8")).get("ok"):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _confirm_prompt(sid, shell_pid, since, n_chars):
+    """10-04(11:35 实发): 长中文句打进输入框后回车被当成粘贴里的换行, 字停在输入框没发出去。
+    打字后等对话真收到(UserPromptSubmit); 等不到就补一次回车再等。→ 给网页看的一句说明。"""
+    first = min(6.0, 1.5 + n_chars * 0.008)          # 桥那边回车前要等 300 ms + 6 ms/字, 这里多留余量
+    end = time.time() + first
+    while time.time() < end:
+        if _prompt_seen(sid, since):
+            return "对话已收到"
+        time.sleep(0.25)
+    if not _bridge_enter(shell_pid):
+        return "未确认收到, 补回车失败(桥可能是旧版, 需 Reload Window) —— 请到终端手动按回车"
+    end = time.time() + 3.0
+    while time.time() < end:
+        if _prompt_seen(sid, since):
+            return "第一次回车没生效, 已补按一次回车, 对话已收到"
+        time.sleep(0.25)
+    return "已补按回车但仍未确认收到 —— 请到终端看一眼"
+
+
+def _relay():
+    """可选: config.json 的 "relay_dir" 指向一个带 relay.py(queue/log_sent) 的目录 —— 对话在跑时把消息排队, 由钩子送达。没配就不排队。"""
+    d = config._cfg.get("relay_dir")
+    if not d:
+        return None
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    try:
+        import relay
+        return relay
+    except Exception:
+        return None
+
+
+def new_session(cwd, text="", where="vscode"):
+    """开新对话(10-04 用户「加一个开新对话功能。新对话可以只在对话管理器开，也可以同时也在vscode开，默认也在vscode开」)。
+    where="vscode": 经 VS Code 桥 /new 开终端标签跑 claude(不给 name, 免得成静态标签), 等 ~/.claude/sessions/<pid>.json 出现拿到 sid;
+                    有第一句话就经 send_to 打进去。网页这边就是镜像 + 输入框(A 路线)。
+    where="manager": 网页托管(B 路线, headless stream-json)还没做 —— 明确报不支持。
+    → {ok, sid, pid, shell_pid, sent?, ms} / {ok: False, why}"""
+    t0 = time.time()
+    if where != "vscode":
+        return {"ok": False, "why": "「只在管理器」要等网页托管会话(B 路线)做好; 现在只能开在 VS Code 里、网页镜像"}
+    cwd = os.path.abspath(os.path.expanduser(cwd or os.path.expanduser("~")))
+    if not os.path.isdir(cwd):
+        return {"ok": False, "why": "目录不存在: %s" % cwd}
+    trusted = actions.trust_folder(cwd) if config.AUTO_TRUST else None
+    via = actions.bridge("/new", {"cwd": cwd, "cmd": "claude"}, timeout=10, side_effect=True)
+    if not via:
+        return {"ok": False, "why": "没找到 VS Code 桥(扩展没装? VS Code 没开?) —— 没有开任何东西"}
+    if not via.get("ok") or not via.get("pid"):
+        return {"ok": False, "why": "桥没开成终端: %s" % (via.get("why") or via)}
+    shell = int(via["pid"])
+    sdir = os.path.join(config.CLAUDE_HOME, "sessions")
+    import psutil
+    sid = pid = None
+    while time.time() - t0 < 25 and not sid:          # claude 起来要几秒; 按「父进程 = 这个终端的 shell」认领
+        for f in os.listdir(sdir):
+            try:
+                with io.open(os.path.join(sdir, f), encoding="utf-8") as fh:
+                    d = json.load(fh)
+                if psutil.Process(int(d["pid"])).ppid() == shell:
+                    sid, pid = d.get("sessionId"), d.get("pid"); break
+            except Exception:
+                continue
+        if not sid:
+            time.sleep(0.3)
+    if not sid:
+        return {"ok": False, "why": "终端开了(shell pid %d), 但 25 s 内没等到 claude 起来 —— 去 VS Code 看一眼那个标签" % shell, "shell_pid": shell}
+    r = {"ok": True, "sid": sid, "pid": pid, "shell_pid": shell, "cwd": cwd, "trusted": trusted}
+    text = (text or "").strip()
+    if text:
+        for i in range(30):                              # 刚起来的会话要等它到「空闲」才能收字
+            try:
+                r["sent"] = send_to(sid, text)
+            except ValueError as e:
+                r["sent"] = {"ok": False, "why": str(e)}
+            if r["sent"].get("ok") or "没开着" not in (r["sent"].get("why") or ""):
+                break
+            time.sleep(0.5)
+    r["ms"] = int((time.time() - t0) * 1000)
+    return r
+
+
+def send_to(sid, text):
+    """网页输入框发一句话给某会话(10-04 用户「以后和claude聊统一通过对话管理器」A 路线)。
+    空闲 → 经 VS Code 桥 /type 打进它的终端并回车(桥只收单行、须以【开头, 所以换行压成空格、加「【对话管理器】」头);
+    在跑 → 配了 relay 就排队(钩子在下一次工具调用后 / 本轮结束时塞进上下文), 没配就报「等这一轮结束再发」。
+    没开着的会话直接报失败; 空闲但打字失败也报失败, 不悄悄排队 —— 网页要的是「发出去了没有」。
+    空闲/在跑按 turn_push.status_of 判(与标签 ▶ 同源; 会话文件的 status 有 idle / waiting / busy 三种值)。"""
+    text = " ".join(str(text or "").split())
+    if not text:
+        raise ValueError("消息不能为空")
+    if len(text) > 3900:
+        raise ValueError("消息太长(>3900 字)")
+    sdir = os.path.join(config.CLAUDE_HOME, "sessions")
+    sess = None
+    for f in (os.listdir(sdir) if os.path.isdir(sdir) else []):
+        try:
+            with io.open(os.path.join(sdir, f), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except Exception:
+            continue
+        if d.get("sessionId") == sid and alive_pids([int(d.get("pid") or 0)]):
+            sess = d
+            break
+    if not sess:
+        return {"ok": False, "why": "这个对话没开着(没有活的 claude 进程) —— 先 Resume"}
+    st = turn_push.status_of(sess, turn_push.states().get(sid)) if turn_push else sess.get("status")
+    if st in ("idle", "waiting"):
+        try:
+            import psutil
+            shell = psutil.Process(int(sess["pid"])).ppid()
+        except Exception:
+            shell = None
+        if not shell:
+            return {"ok": False, "why": "找不到它所在终端的 shell 进程"}
+        t_typed = time.time()
+        ok, why = _bridge_type(shell, "【对话管理器】" + text)
+        if not ok:
+            return {"ok": False, "why": "打字失败: " + why}
+        why += "; " + _confirm_prompt(sid, shell, t_typed, len(text))
+        R = _relay()
+        if R:
+            R.log_sent(sid, dict(ts=time.strftime("%Y-%m-%dT%H:%M:%S"), frm="对话管理器", text=text, mode="typed"))
+        return {"ok": True, "mode": "typed", "why": why, "ts": time.time()}
+    R = _relay()
+    if not R:
+        return {"ok": False, "why": "对话在跑(%s), 终端只在空闲时收字 —— 等这一轮结束再发" % st}
+    m = R.queue(sid, text, "对话管理器")
+    return {"ok": True, "mode": "queued", "why": "对话在跑(%s), 下一次工具调用后或本轮结束时由钩子送达" % st, "id": m["id"], "ts": time.time()}
 
 
 # ---------------------------------------------------------------- resume
@@ -1130,7 +1736,7 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
         # 在 VS Code 里开一个新终端标签并把命令敲进去 —— 走扩展的 createTerminal +
         # sendText, 不抢焦点也不会敲错窗口。桥不在(没装扩展 / VS Code 没开)就自动
         # 退回终端那条路, 并在返回里说清楚为什么。
-        via = actions.bridge("/new", {"cwd": cwd, "cmd": line, "name": title})
+        via = actions.bridge("/new", {"cwd": cwd, "cmd": line, "name": title}, timeout=10, side_effect=True)
         if via and via.get("ok"):
             # createTerminal + show() 只是在 VS Code **内部**把新终端设为活动标签,
             # IDE 窗口本身还留在你身后 —— 和 Terminal.show() 在 focus 里的坑一模一样,
@@ -1147,6 +1753,8 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
             if not fg.get("ok"):
                 r["why"] = "已在 VS Code 开好终端, 但 IDE 窗口没能提到前台 — 点一下任务栏"
             return r
+        if via and via.get("timeout"):        # 桥慢 ≠ 桥不在: 终端可能已经开了, 再退回 Windows Terminal 就成了两个窗口跑同一个对话
+            return {"ok": False, "cwd": cwd, "why": via["why"]}
         fell_back = (via or {}).get("why") or "没找到 VS Code 桥(扩展没装? VS Code 没开?)"
         terminal = "type"                     # 退回原来的做法
     else:
@@ -1220,6 +1828,33 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send(500, "index.html 读不到: %s" % e, "text/plain; charset=utf-8")
 
+        if u.path == "/md.js":                               # 与本机其他看板共用的 Markdown 渲染(只维护一份, 用户 10-04「像 claude 控制台显示相应的字体」)
+            try:
+                with io.open(config._cfg.get("md_js") or os.path.join(HERE, "md.js"), encoding="utf-8") as fh:
+                    return self._send(200, fh.read(), "text/javascript; charset=utf-8")
+            except Exception as e:
+                return self._send(404, "md.js 读不到: %s" % e, "text/plain; charset=utf-8")
+
+        if u.path == "/xref.js":                             # 10-04: 对话文字自动链接(编号/网址/路径/缩写)
+            with io.open(os.path.join(HERE, "xref.js"), encoding="utf-8") as fh:
+                return self._send(200, fh.read(), "text/javascript; charset=utf-8")
+
+        if u.path == "/api/xref/rules":
+            return self._send(200, xref_rules())
+
+        if u.path == "/api/xref/hover":
+            try:
+                r = config._cfg.get("xref", [])[int(q.get("r", ["-1"])[0])]
+            except (IndexError, ValueError):
+                return self._send(404, {"error": "no rule"})
+            k = q.get("k", [""])[0]
+            if not r.get("hover") or not re.fullmatch(r.get("re", ""), k):
+                return self._send(404, {"error": "no match"})
+            return self._send(200, xref_fetch(r["hover"].replace("{0}", k)))
+
+        if u.path == "/api/xref/path":
+            return self._send(200, path_info(q.get("p", [""])[0], q.get("cwd", [""])[0]))
+
         if u.path == "/api/sessions":
             t0 = time.time()
             limit = int(q.get("limit", ["150"])[0])
@@ -1238,6 +1873,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"rows": rows, "scanned": scanned, "total": n_all,
                                     "ms": int((time.time() - t0) * 1000)})
 
+        if u.path == "/api/status/stream":            # SSE: 状态一变就推(浏览器不再 2 s 轮询)
+            if not turn_push:
+                return self._send(404, {"error": "没有 turn_push"})
+            return turn_push.sse(self, turn_push.watcher(extra=(STATE_DIR, os.path.join(STATE_DIR, "outline"))), event="status")
+
         if u.path == "/api/status":
             t0 = time.time()
             m = status_map()
@@ -1250,7 +1890,7 @@ class Handler(BaseHTTPRequestHandler):
             fp = q.get("path", [""])[0]
             if not fp:
                 return self._send(400, "缺 path", "text/plain; charset=utf-8")
-            return self._send(200, preview_html(fp), "text/html; charset=utf-8")
+            return self._send(200, preview_html(fp) + JUMP_HTML, "text/html; charset=utf-8")
 
         if u.path == "/reveal":
             fp = q.get("path", [""])[0]
@@ -1262,11 +1902,46 @@ class Handler(BaseHTTPRequestHandler):
                                     "model": advisor.MODEL,
                                     "hist": advisor.hist()})
 
+        if u.path == "/api/tree/stream":              # 10-04 A: 单对话视图实时镜像 —— 这个会话的 jsonl 一写就推(浏览器收到再拉 /api/tree)
+            return tree_sse(self, q.get("id", [""])[0])
+
         if u.path == "/api/tree":
             sid = q.get("id", [""])[0]
             d = conv_tree(sid)
             if d is None:
                 return self._send(404, {"error": "not found"})
+            import outline                            # 10-04: 话题脉络(小折叠树), 由 Stop 钩子后台更新
+            d["outline"] = outline.load(sid)
+            d["story"] = outline.handoff_story(d.get("turns") or [])   # 接手对话: 交接文件里的来龙去脉原文
+            return self._send(200, d)
+
+        if u.path == "/replay":
+            try:
+                with io.open(os.path.join(HERE, "replay.html"), encoding="utf-8") as fh:
+                    return self._send(200, fh.read(), "text/html; charset=utf-8")
+            except Exception as e:
+                return self._send(500, "replay.html 读不到: %s" % e, "text/plain; charset=utf-8")
+
+        if u.path == "/api/replay":
+            sid = q.get("id", [""])[0]
+            p = find_transcript(sid)
+            if not p:
+                return self._send(404, {"error": "not found"})
+            return self._send(200, replay.events(
+                p, int(q.get("from", ["0"])[0]), int(q.get("n", ["200"])[0]),
+                q.get("kinds", [""])[0], q.get("q", [""])[0], q.get("kw", [""])[0],
+                q.get("nosys", ["0"])[0] == "1"))
+
+        if u.path == "/api/starred":
+            return self._send(200, replay.starred(PROJ, q.get("kw", [""])[0]))
+
+        if u.path == "/api/outline":
+            sid = q.get("id", [""])[0]
+            p = find_transcript(sid)
+            if not p:
+                return self._send(404, {"error": "not found"})
+            d = replay.outline(p, q.get("kw", [""])[0], q.get("nosys", ["0"])[0] == "1")
+            d["path"] = p
             return self._send(200, d)
 
         return self._send(404, {"error": "no route"})
@@ -1278,6 +1953,65 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(ln).decode("utf-8")) if ln else {}
         except Exception:
             data = {}
+
+        if u.path == "/api/new":                      # 10-04: ＋ 新对话
+            r = new_session(data.get("cwd", ""), data.get("text", ""), data.get("where") or "vscode")
+            return self._send(200 if r.get("ok") else 409, r)
+
+        if u.path == "/api/paste_image":              # 10-04 用户「应该支持粘贴图片（像命令行）」: 存成文件, 消息里带路径, claude 用 Read 看图
+            import base64
+            m = re.match(r"data:image/(png|jpeg|jpg|gif|webp);base64,(.*)$", data.get("data") or "", re.S)
+            if not m:
+                return self._send(400, {"ok": False, "why": "只收 png/jpeg/gif/webp 的 dataURL"})
+            raw = base64.b64decode(m.group(2))
+            if len(raw) > 20 * 1024 * 1024:
+                return self._send(413, {"ok": False, "why": "图片超过 20 MB"})
+            d = os.path.join(HERE, "uploads", time.strftime("%Y-%m-%d"))
+            os.makedirs(d, exist_ok=True)
+            ext = "jpg" if m.group(1) == "jpeg" else m.group(1)
+            p = os.path.join(d, "paste_%s_%03d.%s" % (time.strftime("%H%M%S"), int(time.time() * 1000) % 1000, ext))
+            with open(p, "wb") as fh:
+                fh.write(raw)
+            return self._send(200, {"ok": True, "path": p.replace("\\", "/"), "bytes": len(raw)})
+
+        if u.path == "/api/send":                     # 10-04 A: 网页输入框 → 该会话所在终端(空闲) / 排队(在跑, 需配 relay)
+            try:
+                r = send_to(data.get("id", ""), data.get("text", ""))
+            except ValueError as e:
+                r = {"ok": False, "why": str(e)}
+            return self._send(200 if r.get("ok") else 409, r)
+
+        if u.path == "/api/unsend":                   # 10-04 撤回排队中的消息(已打进终端的撤不回; 前端在打字前另有几秒反悔窗)
+            R = _relay()
+            if not R or not hasattr(R, "unqueue"):
+                return self._send(409, {"ok": False, "why": "没配 relay, 没有排队这回事"})
+            ok, why = R.unqueue(str(data.get("id", "")), str(data.get("mid", "")))
+            return self._send(200 if ok else 409, {"ok": ok, "why": why})
+
+        if u.path == "/api/xref/open":                # 10-04: 路径链接 → 打开文件夹 / 在资源管理器里选中文件
+            if self.headers.get("X-Desk-Client") != "1":
+                return self._send(403, {"ok": False, "why": "缺 X-Desk-Client 头"})
+            fp = os.path.normpath(os.path.expanduser(str(data.get("path") or "")))
+            if not os.path.exists(fp):
+                return self._send(404, {"ok": False, "why": "不存在"})
+            if os.path.isdir(fp) and not data.get("select"):
+                subprocess.Popen(["explorer", fp])
+                return self._send(200, {"ok": True})
+            return self._send(200, reveal(fp))
+
+        if u.path == "/api/topics":                   # 10-04: 「生成/重写脉络」按钮 —— 后台跑(~30 s), 完成后 tree 流会推
+            sid = data.get("id", "")
+            if not re.fullmatch(r"[0-9a-f-]{36}", sid or "") or not find_transcript(sid):
+                return self._send(404, {"ok": False, "why": "没有这个对话"})
+            import outline
+            if os.path.exists(outline.path_of(sid) + ".lock"):
+                return self._send(200, {"ok": True, "why": "已经在生成"})
+            args = [sid] + (["--force"] if data.get("force") else [])
+            w = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            subprocess.Popen([w if os.path.exists(w) else sys.executable, os.path.join(HERE, "outline.py")] + args, cwd=HERE,
+                             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return self._send(200, {"ok": True, "why": "已开始, 约 30 秒"})
 
         if u.path == "/api/note":
             sid = data.get("id", "")
@@ -1292,6 +2026,9 @@ class Handler(BaseHTTPRequestHandler):
                 rec["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 notes[sid] = rec
                 save_notes(notes)
+            if "title" in data:                       # 10-04: 手填标题 = 三处统一的标题, 同步写进 VS Code 标签; 清空就退回脉络标题
+                import outline
+                threading.Thread(target=outline.push_label, args=(sid, (outline.load(sid) or {}).get("title", "")), daemon=True).start()
             return self._send(200, {"ok": True})
 
         if u.path == "/api/retitle":
@@ -1364,6 +2101,7 @@ class Handler(BaseHTTPRequestHandler):
             pid = data.get("pid")
             if not sid or not pid:
                 return self._send(400, {"error": "need id + pid"})
+            T0 = time.time(); ms = {}                 # 10-04 用户「管理器连标签页关闭，怎么这么久」: 各段计时回传
             states = load_states()
             alive = alive_pids(all_pids(states))
             rec = states.get(sid) or {}
@@ -1382,13 +2120,18 @@ class Handler(BaseHTTPRequestHandler):
             # 关标签页优先走桥: VS Code 自己 dispose() 掉的标签干干净净, 不会留下
             # "terminal process terminated with exit code" 那条提示(我们杀 shell
             # 是非零退出码)。桥不在就退回杀 shell, 结果一样只是多一条提示。
+            ms["locate"] = int((time.time() - T0) * 1000)
             via = None
             if want_tab and w.get("shell_pid") and                     (w.get("owner") or w.get("term") or "").lower() == "code.exe":
                 via = actions.bridge("/close", {"pid": w["shell_pid"]})
+            ms["bridge"] = int((time.time() - T0) * 1000) - ms["locate"]
             r = actions.close_claude(pid, ct, hwnd=w.get("hwnd"),
                                      close_terminal=want_term and not others,
                                      term_name=w.get("term"),
-                                     kill_shell=want_tab and not (via and via.get("ok")))
+                                     kill_shell=want_tab and not (via and via.get("ok")),
+                                     reset=not (via and via.get("ok")))
+            ms["kill"] = int((time.time() - T0) * 1000) - ms["locate"] - ms["bridge"]
+            r["ms"] = ms
             if via and via.get("ok"):
                 r["tab_closed"] = "vscode-bridge"
             r["siblings"] = len(others)

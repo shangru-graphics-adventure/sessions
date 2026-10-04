@@ -7,17 +7,17 @@
 
 轮到用户 =
   Stop: 交互会话(~/.claude/sessions/<pid>.json 里 kind=interactive) 且 没有在跑的后台任务(payload.background_tasks 里没有 running / pending)
-        —— 把提示音直接挂在所有 Stop 上的问题: 脚本起的 headless `claude -p`、放后台任务后结束本轮(之后会被唤醒接着干)都会响, 这是误响来源。
+        —— 以前 ding.ps1 挂在所有 Stop 上: 脚本起的 headless `claude -p`、放后台任务后结束本轮(之后会被唤醒接着干)都会响, 这是误响来源。
   Notification: 权限确认 / 需要输入(message 含 permission / 权限 / input / 等待) → 轮到用户; 其余通知不动。
 不轮到: UserPromptSubmit(用户刚答完) → 挪回分割线上。
-动作: 轮到 → 响铃($CLAUDE_TURN_SOUND 指向的 .wav, 没有就用系统提示音) + 桥 /place below; UserPromptSubmit → /place above。
-开关: 存在 ~/.claude/scripts/turn_notify_noplace 则只响不挪。铁律: 吞掉一切异常, exit 0, stdout 不写。"""
+动作: 轮到 → 响铃(ding.ps1, 无窗口后台) + 标签前加「▶ 」; UserPromptSubmit → 去掉「▶ 」(10-04 起不再挪标签, 见 tab_title.py)。
+开关: 存在本目录的 turn_notify_noplace 则只响不挪。铁律: 吞掉一切异常, exit 0, stdout 不写。"""
 import io, json, os, subprocess, sys, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(HERE, "turn_notify.log")
 SESS = os.path.join(os.path.expanduser("~"), ".claude", "sessions")
-SOUND = os.environ.get("CLAUDE_TURN_SOUND", "")
+DING = os.path.join(HERE, "ding.ps1")
 NOPLACE = os.path.join(HERE, "turn_notify_noplace")
 NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 ACTIVE = {"running", "pending", "in_progress", "started", "queued"}
@@ -100,12 +100,20 @@ def place(sess, where):
     return "没有桥认领 pid %s(或桥是旧版, 需重启扩展宿主)" % sp
 
 
+def mark(sid, where, prompt=""):
+    """10-04 改: 不再挪标签(VS Code 只能经编辑区绕一圈挪, 全窗口闪), 改为标签名前加「▶ 」= 等你(tab_title.py, 改控制台标题, 零闪动)。"""
+    if os.path.exists(NOPLACE): return "关闭标记"
+    try:
+        sys.path.insert(0, HERE)
+        import tab_title
+        ok, why = tab_title.apply(sid, where == "below", prompt=prompt)
+        return "title %s %s" % ("去▶(等你)" if where == "below" else "▶(在跑)", why if not ok else "ok")
+    except Exception as e:
+        return "title 失败 %r" % e
+
+
 def ding():
-    """不阻塞 hook: 起一个无窗口的子进程放声音(winsound 同步播放会卡住 hook)。"""
-    code = ("import winsound,sys; f=sys.argv[1]; "
-            "winsound.PlaySound(f, winsound.SND_FILENAME) if f else winsound.MessageBeep(winsound.MB_ICONASTERISK)")
-    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    subprocess.Popen([pyw if os.path.exists(pyw) else sys.executable, "-c", code, SOUND],
+    subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", DING],
                      creationflags=NOWIN | getattr(subprocess, "DETACHED_PROCESS", 0), close_fds=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -116,11 +124,22 @@ def main(event):
         sid = p.get("session_id") or ""
         sess = session_file(sid)
         turn, why, where = decide(event, p, sess)
+        if event == "Stop" and sess and sess.get("kind") == "interactive":      # 第一轮答完 → 起标签名(10-04)
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import first_prompt_title; first_prompt_title.handle(sid)
+            except Exception as e: log("autotitle 启动失败 %r" % e)
         if turn: ding()
-        res = place(sess, where) if where else "-"
+        res = mark(sid, where, p.get("prompt") or "") if where else "-"
+        if event == "Stop" and not where and sess and sess.get("kind") == "interactive":   # 后台任务还在跑: 标签保持 ▶, 状态也补记「在跑」(在线对话面板/对话管理器读它, 否则会被管理器 Stop 的 done 盖掉)
+            try:
+                sys.path.insert(0, HERE); import tab_title; tab_title.record_state(sid, False); res = "仍在跑(补记状态)"
+            except Exception as e: res = "补记状态失败 %r" % e
         bt = p.get("background_tasks")
-        log("%s %s %s turn=%s %s | place %s | bg=%s msg=%r keys=%s" % (event, sid[:8], (sess or {}).get("name"), turn, why, res,
-            json.dumps(bt, ensure_ascii=False)[:300] if bt is not None else None, str(p.get("message") or "")[:80], sorted(p.keys())))
+        sc = p.get("session_crons")  # 10-03: 值未观察过; 挂 /loop 唤醒的会话 Stop 时是否该算轮到用户, 攒数据再定
+        log("%s %s %s turn=%s %s | place %s | bg=%s crons=%s msg=%r keys=%s" % (event, sid[:8], (sess or {}).get("name"), turn, why, res,
+            json.dumps(bt, ensure_ascii=False)[:300] if bt is not None else None,
+            json.dumps(sc, ensure_ascii=False)[:200] if sc is not None else None, str(p.get("message") or "")[:80], sorted(p.keys())))
     except Exception as e:  # noqa: BLE001
         log("error %s %r" % (event, e))
 

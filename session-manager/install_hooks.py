@@ -25,7 +25,8 @@ MARK = "hook_state.py"          # 认领标记: 命令里含这个字符串的�
 # SessionStart 是"这个对话又被开到一个新窗口里了"的最早信号(resume / 新开 / clear),
 # 没有它, 刚 resume 出来还没说话的窗口不会被记上, 而"你已经开着一个了"的提醒
 # 恰恰要在你重复 resume 之前给出来。
-EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd"]
+# PostToolUse(10-04): 一轮进行中定期更新话题脉络(用户「每次较长思考之后更新」); 钩子内只 stat 两次, 够长够久才拉起后台更新
+EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "Notification", "SessionEnd", "PostToolUse"]
 
 
 def entry(event):

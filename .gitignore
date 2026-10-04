@@ -1,15 +1,37 @@
 # --- machine-local data (never commit) ---
-session-manager/notes.json          # your own titles / comments / stars
-session-manager/cache.json          # parse cache, regenerated on demand
-session-manager/state/              # per-session live-status records (hooks)
-session-manager/config.json         # your machine's paths & port
+# your own titles / comments / stars
+session-manager/notes.json
+# parse cache, regenerated on demand
+session-manager/cache.json
+# per-session live-status records (hooks)
+session-manager/state/
+# your machine's paths & port
+session-manager/config.json
 session-manager/titler/corpus.jsonl
 session-manager/titler/titles.jsonl
-session-manager/advice.jsonl         # 「建议」的复盘缓存
-session-manager/advice_last_raw.txt  # 解析失败时留下的模型原始输出
+# 「建议」的复盘缓存
+session-manager/advice.jsonl
+# 解析失败时留下的模型原始输出
+session-manager/advice_last_raw.txt
+# 网页粘贴的图片
+session-manager/uploads/
 ticket-desk/tickets.json
 ticket-desk/tickets.broken.*.json
 ticket-desk/claude-skill/desk_path.txt
+
+# any machine-local caches / corpora / uploads anywhere
+**/cache.json
+**/notes.json
+**/config.json
+**/state/
+**/uploads/
+**/*.jsonl
+!**/fixtures/*.jsonl
+**/inbox/
+**/runs/
+**/backups/
+**/handoff/
+**/launch/
 
 # --- logs / scratch ---
 *.log

@@ -31,14 +31,16 @@ def handle(sid, state=STATE, launch=True):
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
         subprocess.Popen([pyw if os.path.exists(pyw) else sys.executable, TAB, "autotitle", "--sid", sid],
                          creationflags=flags, close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    log("%s 首次提问 → autotitle" % sid[:8])
+    log("%s 第一轮答完 → autotitle" % sid[:8])
     return True
 
 
 def main():
+    """10-04 用户:「应该在第一次回答结束的时候，才去更新标题」—— 起名改由 turn_notify.py 在 Stop(第一轮答完)时调 handle()。
+    UserPromptSubmit 上的这个 hook 保留为空操作(settings.json 不必改)。"""
     try:
         p = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
-        handle(p.get("session_id") or "")
+        if (p.get("hook_event_name") or "UserPromptSubmit") == "Stop": handle(p.get("session_id") or "")
     except Exception as e:  # noqa: BLE001
         log("error %r" % e)
 

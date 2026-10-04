@@ -192,7 +192,9 @@ RAW_DUMP = os.path.join(HERE, "advice_last_raw.txt")
 
 
 def _run_once(corpus, timeout):
-    cmd = ["claude", "-p", "--model", MODEL,
+    # --setting-sources project,local: 不加载用户级 settings —— 一次性会话不跑用户钩子(10-04 实测单次 8.5–9 s → 3.7–4.1 s,
+    # 且不再给它起 VS Code 标签、导出存档、触发脉络); 登录(OAuth)不受影响
+    cmd = ["claude", "-p", "--setting-sources", "project,local", "--model", MODEL,
            "--strict-mcp-config", "--mcp-config", os.path.join(TITLER, "empty_mcp.json"),
            "--settings", os.path.join(TITLER, "empty_settings.json"),
            "--system-prompt", SYSP]

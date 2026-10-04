@@ -109,7 +109,7 @@ def _bridge_one(port, path, body=None, timeout=1.2):
         return None                     # 没装扩展是常态, 不是错误
 
 
-def bridge(path, body=None, timeout=1.2):
+def bridge(path, body=None, timeout=1.2, side_effect=False):
     """跟 VS Code 桥说话(vscode-bridge/ 那个扩展)。没装 / 没开就返回 None。
 
     **每个 VS Code 窗口跑一份桥**, 各占端口段里的一个, 所以这里挨个端口问过去,
@@ -119,15 +119,90 @@ def bridge(path, body=None, timeout=1.2):
     超时给得很短且总额有上限: 这是个"有更好就用, 没有就算了"的增强, 绝不能因为它
     让页面卡住。
     """
+    # 10-04 用户「管理器连标签页关闭，怎么这么久」: 以前挨个端口问, 本机连没人监听的端口要等满超时(1.2 s),
+    # 目标不在第一个窗口时 7 个空端口白等 8.4 s(实测 8.45 s)。现在: 活着的端口缓存 30 s, 只问活着的; 缓存过期就 8 个并行 ping 一次。
+    # side_effect=True(如 /new 开终端): 活着的端口没回应 = 多半是慢(等终端 pid), 动作可能已经做了 ——
+    # 不许再换端口重试(10-04 实发: /new 超过 1.2 s 被当成「桥不在」, 终端其实开了, 页面却报失败)。
     first = None
-    for i in range(max(1, config.VSCODE_BRIDGE_SPAN)):
-        r = _bridge_one(config.VSCODE_BRIDGE_PORT + i, path, body, timeout)
+    for port in _live_ports():
+        r = _bridge_one(port, path, body, timeout)
         if r is None:
-            continue                    # 这个端口没人监听
+            _LIVE["t"] = 0              # 刚才还活着的端口没回应: 下次重探
+            if side_effect:
+                return {"ok": False, "timeout": True, "why": "桥 %d 在 %.0f s 内没回应, 动作可能已经执行了(去 VS Code 看一眼)" % (port, timeout)}
+            continue
         if r.get("ok"):
             return r
         first = first or r              # 记下第一个"在, 但不是它"的回答
     return first
+
+
+_LIVE = {"t": 0.0, "ports": []}
+
+
+def _live_ports(ttl=30.0):
+    import time as _t
+    import threading as _th
+    if _LIVE["ports"] and _t.time() - _LIVE["t"] >= ttl and not _LIVE.get("bg"):
+        # 10-04 用户「关闭时间也特别长」: 缓存过期时同步重探要白等 0.6 s(本机连空端口要等满超时) ——
+        # 有旧名单就先用旧的, 后台重探; 只有名单为空(或刚被判失效, t=0)才同步探
+        if _LIVE["t"]:
+            _LIVE["bg"] = True
+            def _bg():
+                try:
+                    _probe_ports()
+                finally:
+                    _LIVE["bg"] = False
+            _th.Thread(target=_bg, daemon=True).start()
+            return list(_LIVE["ports"])
+    if _t.time() - _LIVE["t"] < ttl and _LIVE["ports"]:
+        return list(_LIVE["ports"])
+    return _probe_ports()
+
+
+_TABS = {"t": 0.0, "names": {}, "bg": False}
+
+
+def tab_names(ttl=3.0):
+    """VS Code 终端标签名: {shell_pid: 标签名}, 来自各窗口桥的 /terminals。
+
+    10-04 用户「关闭标签那里总是有个 untitled vscode」: hook 记的 win_title 是 IDE 主窗口标题
+    (「Untitled-1 - Visual Studio Code」), 每个标签都一样, 没信息; 标签自己的名字只有桥知道。
+    状态接口 2 s 轮询一次, 所以这里只在首次同步取, 之后过期就后台刷新、先用旧的。"""
+    import time as _t
+    import threading as _th
+
+    def _fetch():
+        names = {}
+        for port in _live_ports():
+            r = _bridge_one(port, "/terminals", None, 0.8)
+            for x in (r or {}).get("terminals") or []:
+                if x.get("pid") and x.get("name"):
+                    names[int(x["pid"])] = str(x["name"])
+        _TABS["names"], _TABS["t"] = names, _t.time()
+
+    if not _TABS["t"]:
+        _fetch()
+    elif _t.time() - _TABS["t"] >= ttl and not _TABS["bg"]:
+        _TABS["bg"] = True
+        def _bg():
+            try:
+                _fetch()
+            finally:
+                _TABS["bg"] = False
+        _th.Thread(target=_bg, daemon=True).start()
+    return _TABS["names"]
+
+
+def _probe_ports():
+    import time as _t
+    from concurrent.futures import ThreadPoolExecutor
+    ports = [config.VSCODE_BRIDGE_PORT + i for i in range(max(1, config.VSCODE_BRIDGE_SPAN))]
+    with ThreadPoolExecutor(len(ports)) as ex:
+        ok = list(ex.map(lambda p: _bridge_one(p, "/ping", None, 0.6) is not None, ports))
+    _LIVE["ports"] = [p for p, k in zip(ports, ok) if k]
+    _LIVE["t"] = _t.time()
+    return list(_LIVE["ports"])
 
 
 def trust_folder(cwd, path=None):
@@ -315,7 +390,7 @@ def reset_console(pid, timeout=3.0):
 
 
 def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
-                 term_name=None, kill_shell=False, timeout=5.0):
+                 term_name=None, kill_shell=False, timeout=5.0, reset=True):
     """结束一个对话进程(以及它派生的子进程)。
 
     **动手前先验明正身**, 这是硬约束不是可选项: 进程名必须是 claude.exe, 创建时间
@@ -388,7 +463,7 @@ def close_claude(pid, ctime=None, hwnd=None, close_terminal=False,
 
     out = {"ok": True, "killed": len(gone) + len(alive), "children": len(kids)}
     # 留下来的 shell 要打扫(见 reset_console); 连 shell 一起杀了就没这回事
-    if parent is not None and not kill_shell:
+    if parent is not None and not kill_shell and reset:     # reset=False: 标签页已被桥关掉, 没有控制台可打扫(白等 ~0.9 s)
         try:
             if parent.is_running():
                 out["console_reset"] = reset_console(parent.pid)

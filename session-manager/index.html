@@ -2,6 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Claude 对话管理器</title>
 <style>
   /* 配色: 天蓝 + 粉 + 近白底。
@@ -48,7 +49,58 @@
   #q{flex:1;min-width:220px}
   .muted{color:var(--dim)}
   #stat{font-size:12px;color:var(--dim);margin-left:auto;white-space:nowrap}
-  main{padding:12px 16px 60px}
+  main{padding:12px 16px 60px;min-width:0}
+  /* 左栏(用户 10-04「claude对话管理器也加个左栏方便选取」): 按 在跑/等你/已关 分组, 点一下右边滚到那个对话 */
+  .shell{display:grid;grid-template-columns:var(--railw,260px) minmax(0,1fr)}
+  /* 10-04 用户「网页左栏应该可以拖动宽度，长的字看不见」: 右边缘拖动改宽度(记在本浏览器), 双击恢复 260px */
+  #railDrag{position:fixed;top:var(--hh,56px);left:calc(var(--railw,260px) - 3px);width:7px;height:calc(100vh - var(--hh,56px));cursor:col-resize;z-index:20}
+  #railDrag:hover,#railDrag.on{background:linear-gradient(90deg,transparent 2px,var(--accent) 2px,var(--accent) 4px,transparent 4px)}
+  body.dragging{cursor:col-resize;user-select:none}
+  .rail{position:sticky;top:var(--hh,56px);height:calc(100vh - var(--hh,56px));overflow-y:auto;
+        border-right:1px solid var(--line);background:var(--panel);padding:8px 6px 40px;font-size:13px}
+  .rail .g{display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:6px;cursor:pointer;font-weight:600;color:var(--fg2)}
+  .rail .g:hover{background:var(--panel2)}
+  .rail .g .ar{width:12px;color:var(--dim);font-size:10px}
+  .rail .g .n{margin-left:auto;color:var(--dim);font-weight:400;font-size:12px}
+  .rail .it{display:flex;gap:6px;align-items:baseline;padding:3px 6px 3px 22px;border-radius:6px;cursor:pointer}
+  .rail .it:hover{background:var(--accent-soft)}
+  .rail .it.on{background:var(--accent);color:#fff;font-weight:600;box-shadow:inset 3px 0 0 var(--fg)}   /* 10-04 用户「左边标签页要高亮当前对话」: 实底色, 与悬停区分开 */
+  .rail .it.on .a,.rail .it.on .tg{color:rgba(255,255,255,.8)}
+  .rail .it.opening{color:var(--accent);font-style:italic;cursor:default}
+  .rail .it .t{flex:1;min-width:0;white-space:normal;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35}
+  .rail .it .a{color:var(--dim2);font-size:11px;white-space:nowrap}
+  .goalbox{margin:4px 0 6px;padding:6px 10px;border:1px solid var(--star);border-radius:8px;background:color-mix(in srgb,var(--star) 10%,transparent);font-size:13px;line-height:1.5}
+  .goalbox .glab{font-weight:700;color:var(--star);margin-right:8px}
+  .goalbox .gcond{font-weight:600}
+  .goalbox .gn{margin-left:8px;color:var(--dim);font-size:12px}
+  .goalbox .gwhy{color:var(--fg2);font-size:12px;margin-top:2px}
+  .goalbox .ghint{color:var(--dim);font-size:12px;margin-top:2px}
+  .rail .it .gl{color:var(--star)}
+  /* 10-04 用户「在标签栏也加个关闭按钮，按了就关闭这个对话的全部」: 悬停/选中时出现, 点一下即关(进程 + 终端标签页) */
+  .rail .it .x{visibility:hidden;border:0;background:none;color:inherit;opacity:.65;cursor:pointer;padding:0 3px;font-size:12px;line-height:1;align-self:center;border-radius:4px}
+  .rail .it:hover .x,.rail .it.on .x{visibility:visible}
+  .rail .it .x:hover{opacity:1;background:var(--danger,#c0392b);color:#fff}
+  @media (hover:none){ .rail .it .x{visibility:visible} }
+  .rail .dot-running{color:var(--ok)} .rail .dot-bg{color:var(--ok);opacity:.75} .rail .dot-waiting{color:var(--star)} .rail .dot-reply{color:var(--accent)} .rail .dot-closable{color:var(--dim)} .rail .dot-closed{color:var(--dim2)}
+  .row{scroll-margin-top:calc(var(--hh,56px) + 8px)}
+  .rail .g.all{color:var(--accent)} .rail .g.all.on{background:var(--accent-soft)}
+  body.focus1 main .hint{display:none}
+  .row.flash{outline:2px solid var(--pink-bright);outline-offset:2px}
+  #railBtn{display:none}
+  /* 10-04 ＋ 新对话 */
+  #newPanel{position:fixed;top:calc(var(--hh,56px) + 6px);right:16px;z-index:45;width:min(520px,calc(100vw - 32px))}
+  #newPanel .np{background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:var(--shadow);padding:12px;display:flex;flex-direction:column;gap:8px;font-size:13px}
+  #newPanel #npCwd{width:100%;box-sizing:border-box;font-family:var(--mono);font-size:12px;padding:5px 7px}
+  #newPanel label{display:block}
+  #newPanel textarea{min-height:64px;resize:vertical;font:inherit;padding:6px 8px;border:1px solid var(--line2);border-radius:4px;background:var(--panel);color:var(--fg)}
+  #newPanel .npb{display:flex;gap:8px;align-items:center}
+  @media(max-width:900px){
+    .shell{grid-template-columns:minmax(0,1fr)}
+    #railDrag{display:none}
+    .rail{position:fixed;left:0;top:0;height:100vh;width:min(86vw,320px);z-index:30;transform:translateX(-102%);transition:transform .18s;box-shadow:var(--shadow)}
+    .rail.open{transform:none}
+    #railBtn{display:inline-block;position:fixed;left:12px;bottom:12px;z-index:31;background:var(--pink);color:#fff;border:0;border-radius:999px;padding:7px 14px}
+  }
   .row{background:var(--panel);border:1px solid var(--line);border-radius:8px;
        margin-bottom:5px;padding:7px 10px}
   .row.star{border-color:var(--star);background:var(--star-bg)}
@@ -71,8 +123,9 @@
   .meta{margin-top:2px;font-size:11.5px}
   .cwd{font-family:Consolas,monospace;color:var(--dim)}
   .kb{color:var(--dim2);font-size:11px;margin-left:8px}
+  /* 10-04 用户:「每个对话中间的小段, 应该默认已经滚到最下面而不是最上面」—— 话题行改成可滚的小框, 渲染后滚到最近的提问 */
   .topics{margin-top:3px;font-size:12.5px;color:var(--fg2);cursor:pointer;
-          overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          overflow-y:auto;max-height:3.2em;line-height:1.6em;white-space:normal}
   .tp{margin-right:14px}
   .tp[data-act]{cursor:pointer}
   .tp[data-act]:hover{color:var(--accent)}
@@ -153,10 +206,12 @@
                 text-transform:none;font-weight:400}
   .turn{border-left:2px solid var(--line);padding-left:10px;margin:0 0 11px 2px}
   .turn:hover{border-left-color:var(--line2)}
-  .turn .qn{white-space:pre-wrap;word-break:break-word;color:var(--accent);font-weight:500}
+  /* 10-04 用户「管理器中我的提问要加粗，用一个更加容易看清的字体」: 提问/插问用系统 UI 黑体加粗、稍大 */
+  .turn .qn,.turn .qmid,.turn .qfull .md{font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif}
+  .turn .qn{white-space:normal;word-break:break-word;color:var(--accent);font-weight:700;font-size:14px;line-height:1.5}
   .turn .no{font-family:var(--mono);font-size:10px;color:var(--dim);
             background:var(--panel2);border-radius:2px;padding:0 4px;margin-right:6px}
-  .turn .qt{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-left:7px}
+  .turn .qt{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-left:7px;font-weight:400}
   /* 默认只给 3 行 —— 一屏能看见十几轮, 想细看再点开那一条 */
   .turn .an{margin-top:4px;white-space:pre-wrap;word-break:break-word;color:var(--fg2);
             cursor:pointer;display:-webkit-box;-webkit-line-clamp:3;
@@ -166,7 +221,78 @@
   .turn .an.full{cursor:auto}
   /* .an 自己设了 display, 会盖掉 [hidden] 的 UA 规则 —— 必须显式压回去 */
   .turn .an[hidden]{display:none}
-  .turn .tl{color:var(--dim2)}          /* 工具流水: 在场但不抢戏 */
+  .turn .tl{color:var(--dim2)}
+  /* 10-04: 自动链接(xref.js) —— 编号/网址/路径/缩写; 悬停浮窗 */
+  .xr-rule,.xr-url{color:var(--accent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent);text-underline-offset:2px;cursor:pointer}
+  span.xr-rule{text-decoration-style:dotted}
+  .xr-path{color:inherit;text-decoration:underline dotted;text-decoration-color:var(--dim2);text-underline-offset:2px;cursor:pointer}
+  .xr-path:hover,.xr-rule:hover,.xr-url:hover{background:var(--panel2)}
+  .xr-gloss{text-decoration:underline dotted;text-decoration-color:var(--dim2);text-underline-offset:3px;cursor:help}
+  .xtip{position:fixed;z-index:50;background:var(--panel);color:var(--fg);border:1px solid var(--line2);border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:8px 10px;font-size:12.5px;line-height:1.5;white-space:normal;word-break:break-word}
+  .xtip .xm{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+  .xtip .xpath{font-family:var(--mono);font-size:11.5px;margin:3px 0}
+  .xtip .xpar a,.xtip .xact a{color:var(--accent);cursor:pointer}
+  .xtip .xpar{font-family:var(--mono);font-size:11px}
+  /* 10-04: 话题脉络 —— 对话谈了几个话题、各在第几轮(Stop 钩子后台用 haiku 更新) */
+  #rail .tg{font-family:var(--mono);font-size:10px;color:var(--dim2);white-space:nowrap}
+  .outline{margin:0 0 10px;border:1px solid var(--line);border-radius:4px;background:var(--panel2);padding:6px 10px;font-size:12.5px}
+  .outline>summary{cursor:pointer;color:var(--dim);font-family:var(--mono);font-size:11px;letter-spacing:.06em}
+  .outline>summary button{font-size:10.5px;padding:0 6px;margin-left:8px}
+  .outline ol{margin:6px 0 2px;padding-left:22px}
+  .outline li{margin:2px 0}
+  .outline li summary{cursor:pointer}
+  .outline .ot{color:var(--accent);font-weight:500}
+  .outline .or{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-left:6px;cursor:pointer;text-decoration:underline dotted}
+  .outline ul{margin:2px 0 4px;padding-left:16px;color:var(--fg2)}
+  .outline .oqwr{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;margin:3px 0 6px;color:var(--fg)}
+  .outline .oqwr dt{color:var(--dim);font-size:11.5px;padding-top:1px}
+  .outline .oqwr dd{margin:0;line-height:1.5}
+  .story{margin:6px 0 8px;padding:8px 10px;border-left:3px solid var(--star);background:var(--panel);line-height:1.6;font-size:13px}
+  .story .sh{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:.06em;margin-bottom:4px}
+  .story .sh a{margin-left:10px;color:var(--accent)} .story .sf{color:var(--dim2);font-size:11.5px;margin-bottom:4px}
+  .outline .osum{margin:6px 0 4px;padding:6px 8px;border-left:3px solid var(--accent);background:var(--panel);color:var(--fg);line-height:1.55;font-size:13px}
+  /* 10-04 A: 每轮的完成时刻 / 想了多久(从我提问那一刻算), 在跑的那一轮每秒走 */
+  .turn .dur{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-top:3px}
+  .turn .dur.run{color:var(--accent)}
+  /* 10-04 A: 单对话视图底部的输入框 —— 空闲时经 VS Code 桥打进终端, 在跑时排队由钩子送达(需配 relay) */
+  .compose{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 0 10px;margin-top:8px;display:flex;gap:8px;align-items:flex-end}
+  .compose textarea{flex:1;min-height:38px;max-height:30vh;resize:vertical;font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line2);border-radius:4px;background:var(--panel);color:var(--fg)}
+  .compose .ub{font:inherit;font-size:11px;padding:1px 8px;margin-left:6px;border-radius:5px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);cursor:pointer}
+  .compose .ub.now{border-color:var(--dim2);background:transparent;color:var(--dim)}
+  .compose .cst{font-family:var(--mono);font-size:10.5px;color:var(--dim);min-width:0;flex-basis:100%}
+  .compose .cwrap{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
+  .compose .crow{display:flex;gap:8px;align-items:flex-end}
+  .compose .imgs{display:flex;flex-wrap:wrap;gap:6px}
+  .compose .imgs:empty{display:none}
+  .compose .img{position:relative;border:1px solid var(--line2);border-radius:4px;overflow:hidden;height:56px;background:var(--panel)}
+  .compose .img img{height:56px;display:block}
+  .compose .img .x{position:absolute;top:0;right:0;background:rgba(0,0,0,.6);color:#fff;border:0;font-size:11px;padding:0 4px;cursor:pointer}
+  .compose .img .lb{position:absolute;left:0;bottom:0;background:rgba(0,0,0,.6);color:#fff;font-size:10px;padding:0 4px}
+  /* 10-04 用户「每个页面做一个到顶部、到底部的按钮」 */
+  #jump{position:fixed;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:60}
+  #jump button{width:34px;height:34px;border-radius:50%;border:1px solid var(--line2);background:var(--panel);color:var(--fg);font-size:15px;cursor:pointer;opacity:.75;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+  #jump button:hover{opacity:1}
+  /* 10-04 用户「开关要有反馈，比如正在开，开了」: 固定在左下角, 不管滚到哪都看得见 */
+  #toasts{position:fixed;left:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:61;max-width:min(520px,calc(100vw - 80px))}
+  .toast{background:var(--panel);border:1px solid var(--line2);border-left:4px solid #6b8afd;border-radius:4px;padding:7px 10px;font-size:12.5px;box-shadow:0 2px 8px rgba(0,0,0,.3);transition:opacity .4s}
+  .toast.ok{border-left-color:var(--ok)}
+  .toast.bad{border-left-color:#e5534b}
+  .toast .tm{color:var(--dim);font-family:var(--mono);font-size:11px;margin-left:6px}
+  /* Markdown 渲染(md.js): 加粗/代码/表格/列表像控制台那样显示; md.js 用到的变量在这里对上本页配色 */
+  :root{--lav-soft:#eef1f6;--lav-ink:#7a3d8f;--muted:var(--dim);--blue-ink:var(--accent);--hover:var(--panel2);--ink:var(--fg)}
+  .turn .an.full.md{white-space:normal}
+  /* 10-04: 提问只显示第一行, 全文折叠; 插问(运行中追加的问题)缩进挂在提问下 */
+  .turn .qline{white-space:normal}
+  .turn .qbody{display:block;margin-top:2px}
+  .turn .qbody p{margin:0 0 4px}
+  .turn .qn .qt{display:inline-block}
+  .turn .qfull{margin:2px 0 0 0;font-size:12px}
+  .turn .qfull summary{cursor:pointer;color:var(--dim2);font-family:var(--mono);font-size:10.5px}
+  .turn .qfull .md{white-space:normal;max-height:40vh;overflow:auto;background:var(--panel2);border-radius:3px;padding:4px 8px;margin-top:3px;color:var(--fg2)}
+  .turn .qmid{margin:3px 0 0 14px;color:var(--accent);word-break:break-word;font-weight:700;font-size:13.5px}
+  .turn .qmt{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--panel2);border-radius:2px;padding:0 4px;margin-right:6px}
+  .turn .an.full .tl{display:block;white-space:pre-wrap}
+  .advsec .md p{margin:0}          /* 工具流水: 在场但不抢戏 */
   .turn.hit{border-left-color:var(--accent);background:var(--accent-soft)}
   .turn .amore{display:inline-block;margin-top:3px;font-size:11px;color:var(--dim);
                border:1px solid var(--line);border-radius:3px;padding:1px 7px;cursor:pointer}
@@ -228,6 +354,108 @@
   .st .txt{font-weight:500}
   .sum,.tp i{font-weight:600}
   b,strong{font-weight:600;color:var(--fg)}
+
+  /* ---- 10-04 用户「颜色稍微有点单调，可以用粉蓝配色…更活泼，保持简洁清晰」: 粉蓝活泼层 ----
+     原则: 底色只用极浅的粉/蓝晕染, 饱和色只落在小面积的标记上(编号、id、左色条、主按钮), 文字仍是深灰, 可读性不降。 */
+  :root{--grad:linear-gradient(90deg,#2ea8e6,#f2679a);--sky-tint:#f3f9fe;--pink-tint:#fff6fa}
+  body{background:linear-gradient(160deg,#f2f8fe 0%,#fbfcfe 45%,#fff5f9 100%) fixed}
+  header{background:rgba(255,255,255,.88);backdrop-filter:blur(8px);border-bottom:0;
+         box-shadow:0 1px 0 var(--line),0 2px 0 -1px transparent}
+  header::after{content:"";position:absolute;left:0;right:0;bottom:-2px;height:2px;background:var(--grad);opacity:.85}
+  h1{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  input,select,button,textarea{border-radius:8px;background:var(--panel)}
+  input:focus,textarea:focus{outline:2px solid var(--accent-line);outline-offset:0;border-color:var(--accent-bright)}
+  input[type=checkbox],input[type=radio]{accent-color:var(--pink-bright)}
+  button{transition:background .12s,border-color .12s,color .12s}
+  button:hover{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent)}
+  .btn-go{background:linear-gradient(135deg,#f2679a,#d9467c);border-color:transparent;border-radius:999px;padding:5px 14px;
+          box-shadow:0 2px 8px -2px #f2679a80}
+  .btn-go:hover{background:linear-gradient(135deg,#f57aa8,#e0538a);color:#fff;filter:none}
+  #stat{color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 10px}
+  /* 左栏: 淡蓝底, 分组标题带彩色计数徽章, 当前对话 = 蓝底 + 粉色左条 */
+  .rail{background:linear-gradient(180deg,var(--sky-tint),#fff 60%,var(--pink-tint))}
+  .rail .g{margin-top:6px}
+  .rail .g .n{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:0 7px;font-weight:600}
+  .rail .g .dot-running~.n{color:var(--ok);border-color:#9fd9c1;background:var(--ok-bg)}
+  .rail .g .dot-waiting~.n{color:var(--star);border-color:#ecd39b;background:var(--star-bg)}
+  .rail .g .dot-reply~.n{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+  .rail .it{border-radius:8px;margin:1px 0}
+  .rail .it:hover{background:var(--pink-soft)}
+  .rail .it.on{background:linear-gradient(90deg,var(--accent),#3f95cf);box-shadow:inset 3px 0 0 var(--pink-bright),0 2px 8px -3px #0d76b080}
+  .rail .g.all.on{background:var(--pink-soft);color:var(--pink)}
+  /* 对话卡片: 圆角 + 左色条(默认天蓝, 星标粉, 在跑绿, 等你琥珀) */
+  .row{border-radius:10px;border-left:3px solid var(--accent-line);padding:8px 12px;margin-bottom:7px}
+  .row:hover{border-color:var(--accent-line);border-left-color:var(--accent-bright);box-shadow:0 4px 16px -8px #2ea8e666}
+  .row.star{background:linear-gradient(90deg,var(--pink-tint),#fff 70%);border-color:var(--pink-line);border-left-color:var(--pink-bright)}
+  .row.live{border-left-color:var(--ok)}
+  .row.wait{border-left-color:var(--star)}
+  .row.flash{outline-color:var(--pink-bright)}
+  .time{color:var(--accent)}
+  .sid{background:var(--pink-soft);border-color:var(--pink-line);color:var(--pink);border-radius:999px}
+  .sid:hover{background:var(--pink-bright);border-color:var(--pink-bright)}
+  .starbtn.on{color:var(--pink-bright)}
+  .starbtn:hover{background:transparent;border-color:transparent;color:var(--pink-bright)}
+  .acts button{border-radius:999px}
+  /* 话题编号: 蓝粉交替的小圆片 */
+  .tp i{border-radius:999px;padding:0 5px;background:var(--accent-soft);color:var(--accent)}
+  .tp:nth-of-type(even) i{background:var(--pink-soft);color:var(--pink)}
+  .arts .sum{color:var(--pink)}
+  .art{border-left-color:var(--pink-line)}
+  .arts.open .art{border-left-color:var(--pink-line)}
+  .st{border-radius:8px}
+  .win{border-radius:999px;padding:2px 8px}
+  /* 全文树 / 话题脉络 / 复盘 */
+  .turn{border-left-color:var(--accent-line)}
+  .turn:hover{border-left-color:var(--pink-bright)}
+  .turn .no{background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:0 6px}
+  .turn .qmt{background:var(--pink-soft);color:var(--pink);border-radius:999px}
+  .turn .an.open,.turn .qfull .md{background:var(--sky-tint);border-radius:8px}
+  .turn.hit{background:var(--pink-soft);border-left-color:var(--pink-bright)}
+  .outline{border-radius:10px;background:linear-gradient(135deg,var(--sky-tint),var(--pink-tint));border-color:var(--accent-line)}
+  .outline .osum{border-left-color:var(--pink-bright);border-radius:0 8px 8px 0}
+  .story{border-radius:0 8px 8px 0}
+  .advsec{border-left-color:var(--pink-line)}
+  .thead,.advhead{color:var(--accent)}
+  .compose{background:linear-gradient(180deg,transparent,var(--bg) 30%)}
+  .compose textarea{border-radius:10px}
+  .compose textarea:focus{border-color:var(--pink-bright);outline:2px solid var(--pink-soft)}
+  /* 浮动件 */
+  .toast{border-radius:10px;border-left-color:var(--accent-bright);box-shadow:0 6px 20px -8px #1f293340}
+  .toast.bad{border-left-color:var(--pink)}
+  #jump button{border-color:var(--accent-line);color:var(--accent);opacity:.85}
+  #jump button:hover{background:var(--grad);color:#fff;border-color:transparent}
+  #newPanel .np{border-radius:14px;border-color:var(--pink-line);box-shadow:0 10px 30px -12px #f2679a55}
+  .xtip{border-radius:10px}
+  #railDrag:hover,#railDrag.on{background:linear-gradient(90deg,transparent 2px,var(--pink-bright) 2px,var(--pink-bright) 4px,transparent 4px)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--accent-line);border-radius:999px;border:2px solid transparent;background-clip:padding-box}
+  ::-webkit-scrollbar-thumb:hover{background:var(--pink-line);background-clip:padding-box}
+  ::-webkit-scrollbar-track{background:transparent}
+  /* 10-04 用户「“在跑”可以用更活泼的方式表示」: 呼吸圆点 + 卡片左侧粉蓝流动色条 + 状态条缓慢流光 */
+  @keyframes livePulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.55);opacity:.55}}
+  @keyframes liveFlow{to{background-position:0 0,0 300%}}
+  @keyframes liveSheen{to{background-position:-300% 0}}
+  .st-running .dot{display:inline-block;animation:livePulse 1.3s ease-in-out infinite}
+  .st-running:not(.st-stale){border-color:#9fd9c1;
+      background:linear-gradient(90deg,var(--ok-bg) 0%,var(--accent-soft) 30%,var(--pink-soft) 50%,var(--ok-bg) 70%,var(--ok-bg) 100%);
+      background-size:300% 100%;animation:liveSheen 7s linear infinite}
+  .row.live{border-color:var(--line);border-left:4px solid transparent;
+      background:linear-gradient(var(--panel),var(--panel)) padding-box,
+                 linear-gradient(180deg,#2ea8e6,#f2679a,#2ea8e6,#f2679a) border-box;
+      background-size:100% 100%,100% 300%;animation:liveFlow 2.4s linear infinite}
+  @media (prefers-reduced-motion:reduce){.st-running .dot,.st-running,.row.live{animation:none}}
+  /* 10-04 用户「减少总体ui冗余信息」 */
+  details.hint{margin:0 0 10px}
+  details.hint>summary{cursor:pointer;color:var(--accent);font-size:12px;width:max-content}
+  details.hint[open]{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px}
+  /* 单窗口: 窗口标题/宿主/pid 与卡片标题重复, 切过去与卡片右下按钮重复 —— 只留关闭; 多窗口告警时全显示 */
+  .wins:not(:has(.warn)) .wt,.wins:not(:has(.warn)) .wp,.wins:not(:has(.warn)) [data-act=focus]{display:none}
+  .wins:not(:has(.warn)) .win{border:0;background:none;padding:0}
+  /* 空注释框: 不悬停不占眼 */
+  .row:not(:hover) .note:placeholder-shown:not(:focus){opacity:0}
+  .note{transition:opacity .15s}
+  #rail .it.on .tg{color:rgba(255,255,255,.75)}
+  .wins:not(:has(.warn)) button.danger:not(:hover):not(.armed){color:var(--dim2);border-color:var(--line);background:transparent}
 </style>
 </head>
 <body>
@@ -248,23 +476,47 @@
   <label class="muted" id="dockWrap" title="只对「终端」那条路有效: 开一个纯 cmd 再把 claude --resume 敲进去(这样 claude 界面才有颜色)。勾上=并进当前终端窗口当新标签页; 不勾=弹独立新窗口"><input type="checkbox" id="dockTab" style="vertical-align:-1px" checked> 并入当前终端窗口</label>
   <span id="live" style="color:var(--ok);font-size:12px"></span>
   <span id="poll" style="color:var(--dim);font-size:11px"></span>
+  <button id="btnNew" class="btn-go" title="开一个新对话: 在 VS Code 开终端标签跑 claude, 这里自动进入它的单对话视图">＋ 新对话</button>
   <button id="btnReload">刷新</button>
   <span id="stat"></span>
 </header>
+<div id="newPanel" hidden>
+  <div class="np">
+    <b>＋ 新对话</b>
+    <label>工作目录 <input id="npCwd" list="npCwds" placeholder="C:/Users/…"></label>
+    <datalist id="npCwds"></datalist>
+    <textarea id="npText" placeholder="第一句话(可留空; Enter 开始, Shift+Enter 换行)"></textarea>
+    <div class="npw">
+      <label><input type="radio" name="npWhere" value="vscode" checked> VS Code + 管理器(终端跑, 这里镜像 + 输入)</label>
+      <label title="网页托管会话(B 路线)还没做好"><input type="radio" name="npWhere" value="manager" disabled> 只在管理器(B 路线做好后开放)</label>
+    </div>
+    <div class="npb"><button id="npGo" class="btn-go">开始</button><button id="npCancel">取消</button><span id="npSt" class="muted"></span></div>
+  </div>
+</div>
 
+<div class="shell">
+<nav class="rail" id="rail"></nav>
+<div id="railDrag" title="拖动改左栏宽度 · 双击恢复"></div>
 <main>
-  <div class="hint">
+  <details class="hint"><summary>说明: 状态徽章 · Resume / 切过去</summary>
     <b>状态徽章</b>(hook 实时记账 + 进程存活双重判定): <span style="color:var(--ok)">● 正在跑</span> = 你刚提交、Claude 在干活;
-    <span style="color:var(--star)">● 等你确认</span> = 卡在权限/选择上;
-    <span style="color:var(--accent)">● 开着·等你</span> = 窗口开着但空闲。没有徽章 = 进程已经没了(窗口关了)。
+    <span style="color:var(--star)">● 等你选择</span> = 卡在权限/选择上;
+    <span style="color:var(--accent)">● 等你回复意见</span> = 这一轮结束, 它在问你或还有下一步;
+    <span style="color:var(--dim)">○ 可以关了</span> = 活干完了、没要你回的(由话题脉络判定)。没有徽章 = 进程已经没了(窗口关了)。
     <br>点 <b>Resume</b> 弹一个新 Windows Terminal 窗口, 自动 cd 回原目录再 <code>claude --resume</code>。
     <b>这个对话已经开着的话, 同一个按钮变成「⇥ 切过去」</b>, 直接切到那个窗口而不是再开一个 ——
     两个窗口 resume 同一个对话会写同一份记录、互相覆盖。真开了多个时, 状态条下面会把它们
     一个个列出来, 每个后面带「切过去 / ✕ 关闭」。标题和注释填完点别处自动保存。
-  </div>
+  </details>
   <div id="list"></div>
 </main>
+</div>
+<button id="railBtn">☰ 对话</button>
 
+<script src="/md.js"></script>
+<script src="/xref.js"></script>
+<div id="jump"><button id="jTop" title="到顶部">↑</button><button id="jBot" title="到底部">↓</button></div>
+<div id="toasts"></div>
 <script>
 const $ = s => document.querySelector(s);
 let ROWS = [];
@@ -289,6 +541,7 @@ async function load(){
   const d = await r.json();
   ROWS = d.rows;
   d.rows.forEach(r => { if(r.status) STATUS[r.id] = r.status; });
+  stripClosing(STATUS);
   render();
   paintStatus();
   pollStatus();                     // 列表接口不带工具级动作, 画完立刻补一次真状态
@@ -313,7 +566,12 @@ async function grep(){
   if(ga) ga.onclick = ev => { ev.preventDefault(); GREP_N = 99999; grep(); };
 }
 
-function visible(){
+// 单对话视图(用户 10-04「只显示当前选择的tab那个对话，不要所有tab搞在一起」): FOCUS = 左栏选中的会话 id, 右边只画它
+let FOCUS = null;
+const FOCUS_EMPTY = "∅";                // 单对话视图但不选任何对话 = 右边空白(左栏 ✕ 关掉最后一个标签后)
+const RAIL_HIDE = new Set();            // 从左栏 ✕ 关掉的会话 id
+function visible(){ const all = visibleAll(); if(!FOCUS) return all; const one = all.filter(r => r.id === FOCUS); return one.length ? one : ROWS.filter(r => r.id === FOCUS); }
+function visibleAll(){
   const kw = $("#q").value.trim().toLowerCase();
   let rows = ROWS;
   if($("#onlyStar").checked) rows = rows.filter(r => r.star);
@@ -321,7 +579,7 @@ function visible(){
     const s = STATUS[r.id]; return s && s.state !== "closed";
   });
   if(kw) rows = rows.filter(r =>
-    (r.title+" "+(r.auto_title||"")+" "+r.note+" "+(r.topics||[]).join(" ")+" "+r.cwd+" "+r.id+" "+(r.snippet||"")
+    (r.title+" "+(r.auto_title||"")+" "+(r.label||"")+" "+r.note+" "+(r.topics||[]).join(" ")+" "+r.cwd+" "+r.id+" "+(r.snippet||"")
      +" "+(r.artifacts||[]).map(a=>a.n+" "+a.p).join(" "))
       .toLowerCase().includes(kw));
   return rows;
@@ -330,6 +588,7 @@ function visible(){
 function render(hl){
   const now = Date.now()/1000;
   const rows = visible();
+  if(FOCUS === FOCUS_EMPTY){ $("#list").innerHTML = '<div class="hint">这里空了 — 在左栏选一个对话。</div>'; return; }
   if(!rows.length){
     const kw = $("#q").value.trim();
     if(kw && GREPPED !== kw){
@@ -386,9 +645,9 @@ function render(hl){
             r.ftime && r.ftime - r.mtime > 600
               ? ` — 文件 ${ago(now - r.ftime)}还被写过, 那是开着的窗口在写记账行, 不算活动`
               : ""}">${ago(now - r.mtime)}</span>
-        <input class="title ${(!t && r.auto_title)?'auto':''}" data-act="title" value="${esc(t)}"
-               placeholder="${esc(r.auto_title || r.first) || '(无标题 — 点这里自己命名)'}"
-               title="${esc(r.auto_title ? 'haiku 自动标题(点击可改写为自己的)' : '')}">
+        <input class="title ${(!t && (r.label||r.otitle||r.auto_title))?'auto':''}" data-act="title" value="${esc(t)}"
+               placeholder="${esc((r.label || r.otitle || r.auto_title || r.first || '') + (r.tag ? '  [' + r.tag + ']' : '')) || '(无标题 — 点这里自己命名)'}"
+               title="${esc('与 VS Code 标签、其他看板同一个标题(话题脉络每次回答后更新)。点这里改写成自己的, 三处一起改')}">
         <button class="retitle" data-act="retitle"
                 title="用 haiku 重新起标题(只读你说过的话, 不扫 AI 回答) — 约 20 秒">↻</button>
         <span class="sid" data-act="copy" title="点击复制完整 id">${r.id.slice(0,8)}…</span>
@@ -401,7 +660,7 @@ function render(hl){
       ${arts ? `<div class="arts" data-act="arts" title="点击展开/收起产出的文件">${arts}</div>` : ''}
       ${snip ? `<div class="snip">${snip}</div>` : ''}
       <div class="r3">
-        <textarea class="note" data-act="note" placeholder="我的注释…">${esc(r.note)}</textarea>
+        <textarea class="note" data-act="note" placeholder="我的注释 / 我对这个对话的理解…(编辑即保存)">${esc(r.note)}</textarea>
         <div class="acts">
           <button class="btn-go" data-act="resume">Resume</button>
           <button data-act="tree" title="展开整个对话: 默认只显示最近 3 条提问, 每条回复只给 3 行">全文</button>
@@ -413,6 +672,7 @@ function render(hl){
       <div class="tree" style="display:none"></div>
     </div>`;
   }).join("");
+  document.querySelectorAll("#list .topics").forEach(el => { el.scrollTop = el.scrollHeight; });   // 默认看最近的提问
 }
 
 // ---- 建议(复盘) --------------------------------------------------------
@@ -435,11 +695,11 @@ function advHtml(rec, turnsNow){
       ${stale ? `<span class="advstale">之后又聊了 ${turnsNow - rec.turns} 轮, 这份是旧的</span>` : ""}
       <button data-act="advgo" data-force="1">重新生成</button>
     </div>
-    <div class="advsec"><b>讲了什么</b><div>${esc(a.topic || "(空)")}</div></div>
-    <div class="advsec"><b>初衷</b><div>${esc(a.goal || "(空)")}</div></div>
+    <div class="advsec"><b>讲了什么</b><div class="md">${mdLine(a.topic || "(空)")}</div></div>
+    <div class="advsec"><b>初衷</b><div class="md">${mdLine(a.goal || "(空)")}</div></div>
     <div class="advsec"><b>达到没有</b><div class="v-${cls}">${esc(a.status || "(空)")}</div></div>
     <div class="advsec"><b>接着做什么</b><ol>${
-      (a.next || []).map(x => `<li>${esc(x)}</li>`).join("") || "<li>(空)</li>"}</ol></div>`;
+      (a.next || []).map(x => `<li class="md">${mdLine(x)}</li>`).join("") || "<li>(空)</li>"}</ol></div>`;
 }
 
 // 耗时随对话长短差一倍(实测 3 轮 18s / 71 轮 34s), 所以不能像标题那样只存一个平均值。
@@ -545,6 +805,18 @@ async function openAdv(row, force){
 // 第一层只留最近 3 条提问(最近的才是"我刚才在干嘛"), 第二层每条回复只给 3 行。
 const TREE_HEAD = 3;
 
+// Markdown: md.js 没加载到时退回纯文本(esc), 不让页面坏掉
+const HAS_MD = () => typeof window.mdRender === "function";
+function mdLine(s){ return HAS_MD() ? window.mdInline(s) : esc(s); }
+// 一轮回复 = 文字段与「· 工具」流水交替: 工具行原样灰显, 文字段整段按 Markdown 渲染(代码块/表格跨行, 不能逐行渲染)
+function mdTurn(lines){
+  if(!HAS_MD()) return lines.map(l => l.startsWith("· ") ? `<span class="tl">${esc(l)}</span>` : esc(l)).join("\n");
+  let out = "", buf = [];
+  const flush = () => { if(buf.length){ out += window.mdRender(buf.join("\n")); buf = []; } };
+  for(const l of lines){ if(l.startsWith("· ")){ flush(); out += `<span class="tl">${esc(l)}</span>`; } else buf.push(l); }
+  flush(); return out;
+}
+
 function turnHtml(t, no){
   const tail = (t.tools ? ` · ${t.tools} 次工具` : "")
              + (t.sub ? ` · ${t.sub} 条子 agent` : "")
@@ -554,18 +826,59 @@ function turnHtml(t, no){
   // 照原样截 3 行会全是 "· Bash 读 xxx", 等于什么都没看见。
   const lines = (t.a || "").split("\n");
   const said = lines.filter(l => l && !l.startsWith("· ")).join("\n");
-  const full = lines.map(l => l.startsWith("· ")
-      ? `<span class="tl">${esc(l)}</span>` : esc(l)).join("\n");
+  const full = mdTurn(lines);
   const prev = said
-    ? esc(said)
+    ? said.split("\n").map(mdLine).join("\n")
     : `<span class="tl">(这一轮只有 ${t.tools} 次工具调用, 没有文字)</span>`;
+  // 10-04: 提问保留换行 —— 行首只显示第一行(Markdown), 多行的全文折叠; 运行中插的问题(mid)挂在下面
+  // 10-04 用户「这里怎么省略了」: 提问整段显示(保留换行, 按 Markdown 排), 只有超长粘贴(>1500 字)才折叠
+  const QMAX = 1500, qfull = String(t.q || "");
+  const qShow = qfull.length > QMAX ? qfull.slice(0, QMAX) : qfull;
+  const qmore = qfull.length > QMAX
+    ? `<details class="qfull"><summary>提问全文(${qfull.length} 字, 上面只显示前 ${QMAX} 字)</summary><div class="md">${HAS_MD() ? window.mdRender(qfull) : esc(qfull)}</div></details>` : "";
+  const qHtml = s => HAS_MD() ? window.mdRender(s) : esc(s);
+  const mid = (t.mid || []).map(m => `<div class="qmid"><span class="qmt">插问 ${esc((m.ts || "").slice(11, 16))}</span><div class="md qbody">${qHtml(m.q.length > QMAX ? m.q.slice(0, QMAX) + " …" : m.q)}</div>${m.q.length > QMAX ? `<details class="qfull"><summary>全文(${m.q.length} 字)</summary><div class="md">${qHtml(m.q)}</div></details>` : ""}</div>`).join("");
   return `<div class="turn">
-    <div class="qn"><span class="no">#${no}</span>${esc(t.q)}<span class="qt">${esc(ts)}</span></div>
+    <div class="qn"><span class="no">#${no}</span><span class="qt">${esc(ts)}</span><div class="md qline qbody">${qHtml(qShow)}${qfull.length > QMAX ? " …" : ""}</div></div>${qmore}${mid}
+    ${durHtml(t, no)}
     <div class="an" data-act="ansr">${prev}</div>
-    <div class="an full" data-act="ansr" hidden>${full || "(空)"}</div>
+    <div class="an full md" data-act="ansr" hidden>${full || "(空)"}</div>
     <div class="amore" data-act="ansr" data-tail="${esc(tail)}">展开回复${esc(tail)}</div>
   </div>`;
 }
+
+// 10-04 A(用户「什么时候完成的，想了多长时间（这个时间最好是距离我上一次问的时间）」):
+// 想了多久 = 本轮最后一条 assistant 行时刻 − 我提问时刻(jsonl 每行的 timestamp); 最后一轮且对话在跑 → 「在跑 · 已 X」每秒走
+function hms(sec){ sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return h ? `${h}时${m}分${s}秒` : (m ? `${m}分${s}秒` : `${s}秒`); }
+function hhmmss(ms){ const d = new Date(ms); return d.toTimeString().slice(0, 8); }
+// 网页发出的提问: jsonl 里的提问时刻比我按发送晚 3–4 s(终端收字 + UserPromptSubmit 钩子, 10-04 实测), 所以按发送时刻算「想了多久」
+// SENT[sid] = [{text, t(ms)}]; 新一轮出现前画一条占位轮「已送出 · 等它接收」
+const SENT = {};
+const UNDO_S = 3;                      // 发送前的反悔秒数(撤回按钮)
+function sentFor(sid, t){ const L = SENT[sid] || []; const q = String(t.q || "");
+  return L.find(m => q.includes(m.text.slice(0, 40)) && Math.abs(Date.parse(t.ts || "") - m.t) < 120000); }
+// 已送达 = 成了某一轮的提问, 或作为插问出现(在跑时排队、由钩子送达的那种)
+function delivered(sid, d, m){ return !!(d && d.turns.some(t => sentFor(sid, t) === m || (t.mid || []).some(x => String(x.q || "").includes(m.text.slice(0, 40))))); }
+function pendingHtml(sid){
+  const d = DUR_CTX.box && DUR_CTX.box._data, L = SENT[sid] || [];
+  const open = L.filter(m => !delivered(sid, d, m));
+  return open.map(m => `<div class="turn pend"><div class="qn"><span class="no">…</span><span class="md qline">${esc(m.text.slice(0, 300))}</span><span class="qt">${hhmmss(m.t)}</span></div>
+    <div class="dur run" data-q="${m.t}" data-pre="${m.hold ? "待发出 · 可撤回 · " : m.queued ? "已排队 · 下一次工具调用后送达 · " : "已送出 · 等它接收 · "}">${m.hold ? "待发出 · 可撤回 · " : m.queued ? "已排队 · 下一次工具调用后送达 · " : "已送出 · 等它接收 · "}${hms((Date.now() - m.t)/1000)}</div></div>`);
+}
+function durHtml(t, no){
+  const m = DUR_CTX.sid && sentFor(DUR_CTX.sid, t);
+  const q = m ? m.t : Date.parse(t.ts || ""), e = Date.parse(t.end || "");
+  const box = DUR_CTX.box, last = box && box._data && no === box._data.turns.length;
+  const st = DUR_CTX.sid && STATUS[DUR_CTX.sid] ? STATUS[DUR_CTX.sid].state : "";
+  // 在跑, 而且这一轮还没有回复(或回复早于提问) —— 否则是上一轮已完成、新提问还没落盘
+  if(last && st === "running" && q && !(e > Date.parse(t.ts || "") && pendingOpen(DUR_CTX.sid))) return `<div class="dur run" data-q="${q}">在跑 · 已 ${hms((Date.now() - q)/1000)}</div>`;
+  if(!q || !e || e < q) return "";
+  return `<div class="dur">完成 ${hhmmss(e)} · 想了 ${hms((e - q)/1000)}</div>`;
+}
+let DUR_CTX = {};
+function pendingOpen(sid){ const d = DUR_CTX.box && DUR_CTX.box._data; return (SENT[sid] || []).some(m => !delivered(sid, d, m)); }
+setInterval(() => document.querySelectorAll(".dur.run").forEach(el => { el.textContent = (el.dataset.pre || "在跑 · 已 ") + hms((Date.now() - Number(el.dataset.q))/1000); }), 1000);
 
 // 全文的唯一入口: 「全文」按钮 / 点话题行 / 点某条话题的编号 都走这里。
 // opts.all  = 打开时是否直接显示全部提问
@@ -587,12 +900,13 @@ async function openTree(row, opts){
     return;
   }
   if(d.error){
-    if(!box._data) box.innerHTML = "读不到这个对话的记录";
+    if(!box._data) box.innerHTML = (STATUS[row.dataset.id] && STATUS[row.dataset.id].state !== "closed") ? '<span class="muted">新对话, 还没有内容 —— 在下面发第一句话</span>' : "读不到这个对话的记录";
     return;
   }
   box._data = d;
   if(opts.all !== undefined) box._all = opts.all;
   else if(box._all === undefined) box._all = false;   // 展开状态跨重抓保留
+  box._expand = !!opts.expand;                         // 「全文」= 每一轮的完整回复都摊开; 点某一轮只展开那一轮
   if(opts.jump){
     // 话题是发言的前 46 字, 两边同样做过空白折叠, 所以前缀比对就够
     const i = d.turns.findIndex(t => (t.q || "").startsWith(opts.jump));
@@ -601,7 +915,7 @@ async function openTree(row, opts){
       renderTree(box);
       const turn = box.querySelectorAll(".turn")[i];
       if(turn){
-        turn.querySelector(".amore").click();
+        expandTurn(turn, true);
         turn.scrollIntoView({block: "center"});
         turn.classList.add("hit");
         setTimeout(() => turn.classList.remove("hit"), 1600);
@@ -612,8 +926,47 @@ async function openTree(row, opts){
   renderTree(box);
 }
 
+// 展开 / 收起某一轮的完整回复。展开时把回复框滚到底: 结论写在最后, 停在顶部只能看到第一步工具调用(用户 10-04「默认还是在最上面」)
+function expandTurn(turn, open){
+  const prev = turn.querySelector(".an"), full = turn.querySelector(".an.full"), more = turn.querySelector(".amore");
+  if(!full) return;
+  full.hidden = !open; prev.hidden = open;
+  full.classList.toggle("open", open);
+  if(more) more.textContent = (open ? "收起回复" : "展开回复") + (more.dataset.tail || "");
+  if(open) requestAnimationFrame(() => { full.scrollTop = full.scrollHeight; });
+}
+
+// 10-04 用户「话题偏移了，我很容易忘记这个对话一开始在讲什么…小折叠树，寥寥数语大致记录整个对话的大致流程」
+let OUTLINE_OPEN = true; try{ OUTLINE_OPEN = localStorage.getItem("outlineOpen") !== "0"; }catch(e){}
+// 10-04 用户「handoff的时候，应该用一小段话讲一下来龙去脉，不然每次handoff我都很懵前面的语境是什么」:
+// 接手对话最上面放交接文件里那段来龙去脉原文(服务端直接读文件, 不经模型)
+function storyHtml(d){
+  const s = d.story; if(!s) return "";
+  const body = s.text ? `<div class="md">${HAS_MD() ? window.mdRender(s.text) : esc(s.text)}</div>` : "";
+  return `<div class="story"><div class="sh">接手前情 · 来龙去脉<a href="/file?path=${encodeURIComponent(s.file)}" target="_blank" title="${esc(s.file)}">交接文件</a></div>`
+    + (s.from ? `<div class="sf">${esc(s.from)}</div>` : "") + body + `</div>`;
+}
+function outlineHtml(d){
+  const o = d.outline, n = d.turns.length;
+  if(!o || !(o.topics || []).length)
+    return `<details class="outline"><summary>话题脉络 · 还没有<button data-act="outgen">生成脉络(~30 秒)</button></summary></details>`;
+  const lag = n - (o.upto || 0);
+  const head = `这个对话做了 ${o.topics.length} 件事 · ${esc((o.ts || "").slice(5, 16))} 更新${lag > 0 ? ` · 落后 ${lag} 轮` : ""}`;
+  // 10-04 用户「话题脉络里没法理解这个对话在做什么」: 最上面一段白话总结(在做什么 / 发现了什么 / 卡在哪)
+  const sum = o.summary ? `<div class="osum">${esc(o.summary)}</div>` : "";
+  // 10-04 用户「一打开就知道分别做了几个事情--问题是什么，动机是什么，结论是什么」: 每件事三栏, 默认全部展开
+  const body = t => (t.q || t.why || t.res)
+    ? `<dl class="oqwr">${t.q ? `<dt>问题</dt><dd>${esc(t.q)}</dd>` : ""}${t.why ? `<dt>动机</dt><dd>${esc(t.why)}</dd>` : ""}${t.res ? `<dt>结论</dt><dd>${esc(t.res)}</dd>` : ""}</dl>`
+    : (t.pts && t.pts.length ? `<ul>${t.pts.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : "");
+  return `<details class="outline" ${OUTLINE_OPEN ? "open" : ""}><summary>${head}<button data-act="outgen" data-force="1" title="不管水位整份重写">重写</button></summary>${sum}<ol>`
+    + o.topics.map(t => `<li><details open><summary><span class="ot">${esc(t.t)}</span><span class="or" data-act="otopic" data-from="${t.from}" title="跳到这件事开始的那一轮">第 ${t.from}${t.to > t.from ? "–" + t.to : ""} 轮</span></summary>`
+      + body(t) + `</details></li>`).join("")
+    + `</ol></details>`;
+}
+document.addEventListener("toggle", e => { if(e.target.classList && e.target.classList.contains("outline")){ OUTLINE_OPEN = e.target.open; try{ localStorage.setItem("outlineOpen", OUTLINE_OPEN ? "1" : "0"); }catch(err){} } }, true);
 function renderTree(box){
   const d = box._data;
+  const _row = box.closest(".row"); DUR_CTX = {box, sid: _row && _row.dataset.id};
   if(!d){ box.innerHTML = "(空)"; return; }
   const n = d.turns.length;
   const show = box._all ? d.turns : d.turns.slice(-TREE_HEAD);
@@ -621,16 +974,53 @@ function renderTree(box){
   const btn = box._all
     ? `只看最近 ${TREE_HEAD} 条`
     : (off > 0 ? `显示全部 ${n} 条提问` : "全部已显示");
-  box.innerHTML =
+  // 10-04: 按块比对, 只换内容变了的块 —— 对话在跑时每次工具调用都会推一次, 整树重画会把你正在看的回复框滚回底部、把手动收起的又摊开
+  const parts = [
     `<div class="thead"><span>全文 · ${d.total} 条提问</span>`
     + (d.dropped ? `<span style="text-transform:none;letter-spacing:0">太长, 最早的 ${d.dropped} 条没回传</span>` : "")
-    + `<button data-act="treeall" ${off > 0 || box._all ? "" : "disabled"}>${btn}</button></div>`
-    + show.map((t, i) => turnHtml(t, off + i + 1)).join("");
+    + `<button data-act="treeall" ${off > 0 || box._all ? "" : "disabled"}>${btn}</button></div>`,
+    storyHtml(d) + outlineHtml(d)]
+    .concat(show.map((t, i) => turnHtml(t, off + i + 1)))
+    .concat(DUR_CTX.sid ? pendingHtml(DUR_CTX.sid) : []);
+  const kids = box.children, old = box._parts;
+  const cwd = (ROWS.find(x => x.id === DUR_CTX.sid) || {}).cwd || "";
+  const link = el => { if(window.XREF) XREF.apply(el, cwd); };   // 10-04: 编号/网址/路径/缩写 自动链接
+  if(!old || old.length > parts.length || kids.length !== old.length){
+    box.innerHTML = parts.join("");
+    link(box);
+    if(box._expand) box.querySelectorAll(".turn").forEach(t => expandTurn(t, true));
+  }else{
+    const tpl = document.createElement("template");
+    parts.forEach((h, i) => {
+      if(i < old.length && h === old[i]) return;
+      tpl.innerHTML = h.trim(); const el = tpl.content.firstElementChild;
+      if(i < old.length){ const was = kids[i]; const wasOpen = was.querySelector && was.querySelector(".an.full.open");
+        box.replaceChild(el, was); link(el);
+        if(el.classList.contains("turn") && (box._expand || wasOpen)) expandTurn(el, true);
+        if(el.classList.contains("outline") && was.open !== undefined) el.open = was.open; }
+      else { box.appendChild(el); link(el); if(el.classList.contains("turn") && box._expand) expandTurn(el, true); }
+    });
+  }
+  box._parts = parts;
 }
 
 // ---- 实时状态 ----------------------------------------------------------
 let STATUS = {};
+// 10-04 用户「我希望秒关-你可以先在标签页去掉，关闭失败再弹回来」: 点确认就先把窗口从页面上拿掉(乐观),
+// 后台关; 失败才放回来。CLOSING = 正在关的 claude pid; 任何状态刷新都先把它们剔掉, 免得轮询又画回来。
+const CLOSING = new Set();
+function stripClosing(st){
+  if(!CLOSING.size) return st;
+  for(const k in st){
+    const s = st[k]; if(!s || !s.wins) continue;
+    const w = s.wins.filter(x => !CLOSING.has(x.pid));
+    if(w.length === s.wins.length) continue;
+    st[k] = Object.assign({}, s, {wins: w}, w.length ? {} : {state: "closed"});
+  }
+  return st;
+}
 let LAST_POLL = 0;
+let RAW_STATUS = {};
 
 function fresh(sec){
   // 新鲜度: 每条状态都必须自报"这是多少秒前的消息"
@@ -674,7 +1064,17 @@ function winsHtml(s){
     它们写同一份记录会互相覆盖, 请关到只剩一个:</span>${w.map(one).join("")}</div>`;
 }
 
-function stHtml(s){
+// 10-04 用户「如果goal active的话，在对话管理器也显示」: 服务端读 transcript 里最后一条 goal_status(met=false = 还开着)
+function goalHtml(s){
+  if(!s || !s.goal_on) return "";
+  const why = s.goal_reason ? `<div class="gwhy"><b>最近一次判定(未达成):</b> ${esc(s.goal_reason)}</div>` : "";
+  return `<div class="goalbox"><span class="glab">🎯 goal 开着</span>`
+    + `<span class="gcond">${esc(s.goal_cond || "")}</span>`
+    + `<span class="gn">${s.goal_n ? "已判 " + s.goal_n + " 次未达成" : "刚设定"}</span>${why}`
+    + `<div class="ghint">它每轮结束都会被停止钩子拦回去继续干, 直到判定达成。要停掉: 到这个对话的<b>终端里亲手敲</b> <code>/goal clear</code> —— 从这里发过去的「/goal clear」只是一句普通文字, 不生效。</div></div>`;
+}
+function stHtml(s){ const h = stHtml0(s); return h && goalHtml(s) + h; }
+function stHtml0(s){
   if(!s || s.state === "closed") return "";      // 已关闭的不占地方
   // act_age = jsonl 最后一条记录距今多久(工具级实时);  age = hook 记账距今多久(回合级)
   const hasAct = s.act_age !== null && s.act_age !== undefined;
@@ -698,18 +1098,21 @@ function stHtml(s){
       doing = `<span class="doing">刚收到你的消息, 还没动手</span>`;
     return `<div class="st st-running${stale ? " st-stale" : ""}${multi}"><span class="dot">●</span>
       <span class="lab">${stale ? "正在跑?" : "正在跑"}</span>
-      <span class="txt"><b>目标:</b> ${s.goal ? esc(s.goal) : "目的未概括"}${doing ? " ｜ " + doing : ""}</span>
+      <span class="txt"><b>目标:</b> ${s.goal ? mdLine(s.goal) : "目的未概括"}${doing ? " ｜ " + doing : ""}</span>
       ${fr}</div>${wins}`;
   }
   if(s.state === "waiting")
     return `<div class="st st-waiting${multi}"><span class="dot">●</span>
-      <span class="lab">等你确认</span>
+      <span class="lab">等你选择</span>
       <span class="txt">${esc(s.note || "Claude 在等你选择")}</span>
       ${fr}</div>${wins}`;
   // done 且进程还活着 = 窗口开着, 空闲等你说话
-  return `<div class="st st-done${multi}"><span class="dot">●</span>
-    <span class="lab">开着·等你</span>
-    <span class="txt">${s.result ? "已完成: " + esc(s.result) : "已完成"}</span>
+  // 10-04 用户「模型空闲可回话、但该对话仍有后台子 agent 或后台 shell 在跑」: 单列一种状态
+  const bgN = (s.bg || []).length, bgA = (s.bg || []).filter(x => x.kind === "agent").length;
+  const bgTxt = bgN ? `后台还在跑 ${bgA ? bgA + " 个子 agent" : ""}${bgA && bgN - bgA ? " + " : ""}${bgN - bgA ? (bgN - bgA) + " 个 shell" : ""}(最久 ${fresh(Math.max(...s.bg.map(x => x.age)))}开的) · ` : "";
+  return `<div class="st st-done${bgN ? " st-bg" : ""}${multi}"><span class="dot">●</span>
+    <span class="lab">${bgN ? "可回话 · 后台在跑" : s.sub === "closable" ? "可以关了" : "等你回复意见"}</span><span class="txt" style="flex:0 0 auto">${bgTxt}</span>
+    <span class="txt">${s.result ? "已完成: " + mdLine(s.result) : "已完成"}</span>
     <span class="age">${s.took ? "耗时" + s.took + "s · " : ""}${fresh(a)}</span></div>${wins}`;
 }
 
@@ -778,7 +1181,8 @@ async function pollStatus(){
   if(document.hidden) return;          // 后台标签不轮询, 切回前台会立刻补刷
   try{
     const d = await (await fetch("/api/status")).json();
-    STATUS = d.status || {};
+    RAW_STATUS = d.status || {};
+    STATUS = stripClosing(Object.assign({}, RAW_STATUS));
     LAST_POLL = Date.now();
     paintStatus();
     $("#poll").textContent = "状态 " + fresh(0) + " · " + d.ms + "ms";
@@ -861,12 +1265,21 @@ $("#list").addEventListener("click", async e => {
     btn._busy = true;
     const had = (STATUS[id] && STATUS[id].wins || []).length;
     btn.textContent = had ? "切换中…" : "启动中…";
+    const T = toast((had ? "正在切到「" : "正在开「") + nameOf(rec) + "」…");
     const r = await fetch("/api/resume", {method:"POST",
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({id, cwd: rec.cwd,
         terminal: $("#inVscode").checked ? "vscode"
                 : ($("#dockTab").checked ? "type" : "type-new")})});
     const d = await r.json();
+    if(d.conflict) T.done("没开: 它开着多个窗口, 先关掉多余的", false);
+    else if(d.switched) T.done(d.ok ? "已切过去 ✓" : "切不过去: " + (d.why || "系统拒绝了前台切换"), d.ok);
+    else if(!d.ok) T.done("没开成: " + (d.why || "未知原因"), false);
+    else {
+      T.set("终端已开, 等 claude 起来…");
+      waitWins(id, w => w.length > had, 30000).then(up =>
+        T.done(up ? "开了 ✓「" + nameOf(rec) + "」" : "终端开了, 但 30 秒没看到 claude 进程 —— 去终端看一眼", up));
+    }
     if(d.conflict){
       btn.textContent = "⚠ 开着多个";
       $("#stat").innerHTML = `⚠ ${esc(d.why)} — 下面每个窗口后面都有「✕ 关闭」。`;
@@ -908,22 +1321,40 @@ $("#list").addEventListener("click", async e => {
       return;
     }
     clearTimeout(btn._t);
-    btn.textContent = "关闭中…";
     const pid = +btn.dataset.pid;
-    const r = await fetch("/api/close", {method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({id, pid, close_tab: withTab})});
-    const d = await r.json();
     if(box) box._armed = false;
-    if(d.ok){
-      $("#stat").textContent = d.already ? "它本来就已经关了。"
-        : `已关闭 pid ${pid}` + (d.children ? ` (连同 ${d.children} 个子进程)` : "")
-          + (d.terminal_closed ? ", 终端窗口也一并关掉" : "")
-          + (d.note ? " — " + d.note : "");
-    }else{
-      $("#stat").textContent = "关不掉: " + (d.why || "未知原因");
+    // 乐观: 先从页面(右侧状态 + 左栏)拿掉, 再后台关
+    CLOSING.add(pid);
+    STATUS = stripClosing(Object.assign({}, RAW_STATUS));
+    paintStatus();
+    const T = toast("已关「" + nameOf(rec) + "」" + (withTab ? "(连标签页)" : "") + ", 后台确认中…");
+    const back = why => {               // 失败: 弹回来
+      CLOSING.delete(pid);
+      STATUS = stripClosing(Object.assign({}, RAW_STATUS));
+      paintStatus();
+      T.done("没关掉, 已放回: " + why, false);
+      $("#stat").textContent = "关不掉: " + why;
+    };
+    let d;
+    try{
+      d = await (await fetch("/api/close", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({id, pid, close_tab: withTab})})).json();
+    }catch(err){ back("请求失败 " + err); return; }
+    if(!d.ok){ back(d.why || "未知原因"); return; }
+    $("#stat").textContent = d.already ? "它本来就已经关了。"
+      : `已关闭 pid ${pid}` + (d.children ? ` (连同 ${d.children} 个子进程)` : "")
+        + (d.terminal_closed ? ", 终端窗口也一并关掉" : "")
+        + (d.note ? " — " + d.note : "");
+    // 确认进程真没了(看未剔除的原始状态); 8 s 还在就弹回来
+    const end = Date.now() + 8000; let gone = false;
+    while(Date.now() < end){
+      await pollStatus();
+      if(!(((RAW_STATUS[id] || {}).wins) || []).some(x => x.pid === pid)){ gone = true; break; }
+      await new Promise(r => setTimeout(r, 500));
     }
-    pollStatus();
+    if(gone){ CLOSING.delete(pid); T.done((d.already ? "它本来就已经关了" : "关了 ✓「" + nameOf(rec) + "」") + (d.note ? " — " + d.note : ""), true); }
+    else back("服务端说关了, 但 8 秒后进程还在");
   }
   else if(act === "arts"){
     // 展开后点里面的链接不该把它收回去
@@ -944,7 +1375,7 @@ $("#list").addEventListener("click", async e => {
       box.style.display = "none"; box.classList.remove("on");
       btn.textContent = "全文"; return;
     }
-    await openTree(row);
+    await openTree(row, {all: true, expand: true});
   }
   else if(act === "adv"){
     const box = row.querySelector(".adv");
@@ -959,10 +1390,25 @@ $("#list").addEventListener("click", async e => {
   }
   else if(act === "topics"){
     // 话题行本身就是"我问了哪几件事"的一行索引 —— 点它等于要看全部, 直接摊开全文
-    await openTree(row, {all: true});
+    await openTree(row, {all: true, expand: true});
   }
   else if(act === "topic"){
     await openTree(row, {all: true, jump: btn.dataset.t});
+  }
+  else if(act === "otopic"){
+    e.preventDefault();
+    const box = btn.closest(".tree"); if(!box._all){ box._all = true; renderTree(box); }
+    const n = box._data.turns.length, k = Number(btn.dataset.from);
+    const turn = box.querySelectorAll(".turn:not(.pend)")[k - 1 - (n - box.querySelectorAll(".turn:not(.pend)").length)];
+    if(turn){ expandTurn(turn, true); turn.scrollIntoView({block: "start"}); turn.classList.add("hit"); setTimeout(() => turn.classList.remove("hit"), 1600); }
+  }
+  else if(act === "outgen"){
+    e.preventDefault();
+    btn.disabled = true; btn.textContent = "生成中…";
+    const r = await (await fetch("/api/topics", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: row.dataset.id, force: !!btn.dataset.force})})).json();
+    btn.textContent = r.ok ? "生成中… " + (r.why || "") : "✗ " + (r.why || "");
+    // 完成后: 单对话视图的 tree 流会推; 「全文」模式下 40 秒后重拉一次
+    if(!FOCUS) setTimeout(() => openTree(row, {all: true, expand: true}), 40000);
   }
   else if(act === "treeall"){
     const box = btn.closest(".tree");
@@ -977,10 +1423,7 @@ $("#list").addEventListener("click", async e => {
     const full = turn.querySelector(".an.full");
     const more = turn.querySelector(".amore");
     if(btn === full) return;
-    const open = full.hidden;
-    full.hidden = !open; prev.hidden = open;
-    full.classList.toggle("open", open);
-    more.textContent = (open ? "收起回复" : "展开回复") + (more.dataset.tail || "");
+    expandTurn(turn, full.hidden);
   }
 });
 
@@ -990,7 +1433,7 @@ try{
   if(iv !== null) $("#inVscode").checked = iv === "1";
   const syncDock = () => {
     const on = $("#inVscode").checked;
-    $("#dockWrap").style.opacity = on ? .45 : 1;      // 只对终端那条路有效, 灰掉免得误解
+    $("#dockWrap").style.display = on ? "none" : "";   // 只对终端那条路有效; 走 VS Code 时直接藏起来(10-04 用户「减少总体ui冗余信息」)
     $("#dockWrap").title = on ? "当前走 VS Code, 这个选项不生效" : $("#dockWrap").title;
   };
   $("#inVscode").addEventListener("change", () => {
@@ -1005,6 +1448,13 @@ $("#dockTab").addEventListener("change", () => {
   try{ localStorage.setItem("dockTab", $("#dockTab").checked ? "1" : "0"); }catch(_){}
 });
 
+// 10-04 用户「这个框编辑即保存」「已经有我的注释了…保留一个即可」: 注释停手 0.7 s 就存(以前只在离开框时存)
+const NOTE_T = {};
+$("#list").addEventListener("input", e => {
+  const el = e.target.closest('[data-act="note"]'); if(!el) return;
+  const id = el.closest(".row").dataset.id;
+  clearTimeout(NOTE_T[id]); NOTE_T[id] = setTimeout(async () => { await saveNote(id, {note: el.value}); el.classList.add("saved"); setTimeout(() => el.classList.remove("saved"), 900); }, 700);
+});
 $("#list").addEventListener("change", async e => {
   const el = e.target.closest("[data-act]");
   if(!el) return;
@@ -1016,7 +1466,7 @@ $("#list").addEventListener("change", async e => {
   setTimeout(() => el.classList.remove("saved"), 900);
 });
 
-$("#q").addEventListener("input", () => { render(); paintStatus(); });
+$("#q").addEventListener("input", () => { if(FOCUS){ FOCUS = null; RAIL_ON = null; document.body.classList.remove("focus1"); } render(); paintStatus(); });
 $("#q").addEventListener("keydown", e => { if(e.key === "Enter") grep(); });
 $("#btnGrep").onclick = grep;
 $("#btnReload").onclick = load;
@@ -1024,13 +1474,304 @@ $("#limit").onchange = load;
 $("#onlyStar").onchange = () => { render(); paintStatus(); };
 $("#onlyLive").onchange = () => { render(); paintStatus(); };
 
+// ── 左栏: 跟着 render()(过滤/搜索) 与 paintStatus()(状态推送) 一起重画 ──
+// 10-04 用户「几个类型：正在跑，等你选择，等你回复意见，可以关了」。等你回复意见 / 可以关了 由话题脉络判定(脉络没跟上最新一轮时算等你回复)
+const RAIL_G = [["running","● 正在跑"],["bg","● 可回话 · 后台在跑"],["waiting","● 等你选择"],["reply","● 等你回复意见"],["closable","○ 可以关了"],["closed","已关（最近）"]];
+function railGroup(s){ const st = (s && s.state) || "closed"; return st === "done" ? (s.sub === "closable" ? "closable" : s.sub === "bg" ? "bg" : "reply") : st; }
+let RAIL_SHUT = new Set(["closed"]);
+try{ const v = JSON.parse(localStorage.getItem("railShut")||"null"); if(Array.isArray(v)) RAIL_SHUT = new Set(v); }catch(e){}
+let RAIL_ON = null;
+// 10-04 用户「打开新对话也要显示正在打开，因为有好几秒」+「创建新对话直接秒开…这时我已经可以再创建新的对话」:
+// OPENING = 正在开的新对话列表 [{t0, cwd}], 每个在左栏顶上画一行占位; 可以同时开好几个
+let OPENING = [];
+setInterval(() => { document.querySelectorAll("#rail .op-t").forEach(el => { const o = OPENING[+el.dataset.i]; if(o) el.textContent = Math.round((Date.now() - o.t0)/1000) + "秒"; }); }, 1000);
+// 10-04 用户「vs控制台和对话管理器、任务台里面的标题要统一」: 名字与 VS Code 标签同源(手填 > 标签名(脉络标题会写进去) > 脉络标题 > haiku 标题), 尾巴照抄 cmd 标题的 [版本, 会话名(id)]
+function railName(r){ return r.title || r.label || r.otitle || r.auto_title || r.first || r.id.slice(0,8); }
+function railTag(r){ return r.tag ? `[${r.tag}]` : ""; }
+function paintRail(){
+  const box = $("#rail"); if(!box) return;
+  const now = Date.now()/1000, by = {};
+  const rows = visibleAll().filter(r => !(RAIL_HIDE.has(r.id) && railGroup(STATUS[r.id]) === "closed"));   // 从左栏 ✕ 关掉的: 直接消失, 不挪进「已关」; 之后又被 resume 就重新出现
+  rows.forEach(r => { const st = railGroup(STATUS[r.id]); (by[st] = by[st] || []).push(r); });
+  const op = OPENING.map((o, i) => `<div class="it opening"><span class="t">⏳ 正在打开新对话… ${esc(o.cwd || "~")}${o.text ? " · " + esc(o.text.slice(0, 30)) : ""}</span><span class="a op-t" data-i="${i}">${Math.round((Date.now() - o.t0)/1000)}秒</span></div>`).join("");
+  const html = op + `<div class="g all ${FOCUS ? "" : "on"}" data-all="1"><span class="ar"></span><span>${FOCUS ? "← 全部对话" : "全部对话"}</span><span class="n">${rows.length}</span></div>` + RAIL_G.map(([k, name]) => {
+    const L = by[k] || []; if(!L.length && k !== "running") return "";
+    const shut = RAIL_SHUT.has(k);
+    return `<div class="g" data-g="${k}"><span class="ar">${shut?"▸":"▾"}</span><span class="dot-${k}">${name}</span><span class="n">${L.length}</span></div>` +
+      (shut ? "" : L.map(r => `<div class="it ${RAIL_ON===r.id?"on":""}" data-id="${r.id}" title="${esc(railName(r))} ${esc(railTag(r))} · ${esc(r.cwd||"")}">`
+        + `<span class="t">${(STATUS[r.id]||{}).goal_on?`<span class="gl" title="goal 开着: ${esc((STATUS[r.id]||{}).goal_cond||"")}">🎯</span> `:""}${r.star?"★ ":""}${esc(railName(r))} <span class="tg">${esc(railTag(r))}</span></span><span class="a">${ago(now - r.mtime)}</span>`
+        + ((((STATUS[r.id] || {}).wins) || []).length ? `<button class="x" data-x="${r.id}" title="关闭这个对话: 结束 claude 进程, 连它的终端标签页一起关">✕</button>` : "")
+        + `</div>`).join(""));
+  }).join("") || '<div class="muted" style="padding:8px">没有对话</div>';
+  if(box._html !== html){ box.innerHTML = html; box._html = html; }   // 10-04 用户「好像有些闪动」: 状态推送多数时候左栏没变, 不重写就不闪
+}
+$("#rail").addEventListener("click", e => {
+  const xb = e.target.closest("[data-x]"); if(xb){ e.stopPropagation(); closeRailTab(xb.dataset.x); return; }
+  if(e.target.closest('[data-all]')){ setFocus(null); return; }
+  const g = e.target.closest(".g");
+  if(g){ const k = g.dataset.g; RAIL_SHUT.has(k) ? RAIL_SHUT.delete(k) : RAIL_SHUT.add(k);
+         try{ localStorage.setItem("railShut", JSON.stringify([...RAIL_SHUT])); }catch(err){} paintRail(); return; }
+  const it = e.target.closest(".it"); if(!it) return;
+  setFocus(it.dataset.id);
+  $("#rail").classList.remove("open");
+});
+// 左栏 ✕: 乐观关闭 —— 先让标签从左栏消失并切到下一个(最后一个就留空), 再后台逐个关它开着的窗口; 失败就放回来
+function setEmpty(){
+  FOCUS = FOCUS_EMPTY; RAIL_ON = null;
+  document.body.classList.add("focus1");
+  liveTree(null); render(); paintStatus(); scrollTo(0, 0);
+}
+async function closeRailTab(id){
+  const wins = (((RAW_STATUS[id] || {}).wins) || []).filter(x => !CLOSING.has(x.pid));
+  if(!wins.length) return;
+  const rec = ROWS.find(r => r.id === id) || {id};
+  const items = [...document.querySelectorAll("#rail .it[data-id]")].map(el => el.dataset.id);
+  const next = items[items.indexOf(id) + 1] || null;
+  const wasOn = FOCUS === id || RAIL_ON === id;
+  RAIL_HIDE.add(id);
+  wins.forEach(x => CLOSING.add(x.pid));
+  STATUS = stripClosing(Object.assign({}, RAW_STATUS));
+  if(wasOn){ next ? setFocus(next) : setEmpty(); } else paintStatus();
+  const T = toast("已关「" + nameOf(rec) + "」(连标签页), 后台确认中…");
+  const fails = [];
+  await Promise.all(wins.map(async x => {
+    try{
+      const d = await (await fetch("/api/close", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({id, pid: x.pid, close_tab: true})})).json();
+      if(!d.ok) fails.push([x.pid, d.why || "未知原因"]);
+    }catch(err){ fails.push([x.pid, "请求失败 " + err]); }
+  }));
+  const failed = new Set(fails.map(f => f[0]));
+  const end = Date.now() + 8000; let left = [];
+  while(Date.now() < end){
+    await pollStatus();
+    const alive = new Set((((RAW_STATUS[id] || {}).wins) || []).map(x => x.pid));
+    left = wins.filter(x => alive.has(x.pid) && !failed.has(x.pid)).map(x => x.pid);
+    if(!left.length) break;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  left.forEach(p => fails.push([p, "服务端说关了, 但 8 秒后进程还在"]));
+  wins.forEach(x => CLOSING.delete(x.pid));
+  if(fails.length){
+    RAIL_HIDE.delete(id);
+    STATUS = stripClosing(Object.assign({}, RAW_STATUS)); paintStatus();
+    T.done("没关干净, 已放回左栏: " + fails.map(f => "pid " + f[0] + " " + f[1]).join("; "), false);
+  }else T.done("关了 ✓「" + nameOf(rec) + "」", true);
+}
+async function setFocus(id){
+  FOCUS = id; RAIL_ON = id;
+  document.body.classList.toggle("focus1", !!id);
+  render(); paintStatus(); scrollTo(0, 0);
+  { const it = id && document.querySelector(`#rail .it[data-id="${id}"]`); if(it) it.scrollIntoView({block: "nearest"}); }
+  liveTree(id);
+  if(id){ const row = document.querySelector(`.row[data-id="${id}"]`); if(row){ await openTree(row, {all: true, expand: true}); addCompose(row); scrollTo(0, document.body.scrollHeight); } }
+}
+// ── 10-04 A: 单对话视图 = 实时镜像 + 输入框(用户「以后和claude聊统一通过对话管理器」) ──
+// 这个会话的 jsonl 一写 / 在跑等你一变, 服务端 SSE /api/tree/stream 推 event=tree → 重拉 /api/tree 只重画这一个对话。
+// 终端会话的 jsonl 是整条消息落盘, 所以这里按消息出字(逐字要走 B: 网页托管会话)。
+let TREE_ES = null, TREE_T = null;
+function liveTree(id){
+  if(TREE_ES){ TREE_ES.close(); TREE_ES = null; }
+  if(!id) return;
+  try{ TREE_ES = new EventSource("/api/tree/stream?id=" + id); }catch(e){ return; }
+  let first = true;                    // 一连上服务端先推一次当前版本 —— setFocus 已经拉过, 跳过它, 免得刚点开就重画一遍
+  TREE_ES.addEventListener("tree", () => { if(first){ first = false; return; } clearTimeout(TREE_T); TREE_T = setTimeout(() => refreshFocus(id), 120); });
+}
+async function refreshFocus(id){
+  if(FOCUS !== id) return;
+  const row = document.querySelector(`.row[data-id="${id}"]`); if(!row) return;
+  const box = row.querySelector(".tree");
+  const nearBottom = innerHeight + scrollY >= document.body.scrollHeight - 160;
+  // 正在展开的回复框里选中文字时不重画, 免得选区被冲掉
+  if(String(getSelection()).length && box.contains(getSelection().anchorNode)) return;
+  await pollStatus();
+  await openTree(row, {all: true, expand: true});
+  addCompose(row);
+  if(nearBottom) scrollTo(0, document.body.scrollHeight);
+}
+function addCompose(row){
+  if(row.querySelector(".compose")) return;
+  const c = document.createElement("div"); c.className = "compose";
+  c.innerHTML = `<div class="cwrap"><div class="crow"><textarea placeholder="发给这个对话 · Enter 发送, Shift+Enter 换行(终端只收单行, 换行会变空格) · Ctrl+V 可粘贴图片"></textarea><button class="go">发送</button></div><div class="imgs"></div><div class="cst"></div></div>`;
+  row.appendChild(c);
+  const ta = c.querySelector("textarea"), st = c.querySelector(".cst"), go = c.querySelector(".go"), imgBox = c.querySelector(".imgs");
+  // 10-04 用户「应该支持粘贴图片（像命令行）」: 图存到服务端 uploads/, 发送时消息末尾带「[图片 #n: 路径]」, claude 用 Read 看图
+  const IMGS = [];                     // [{path, url, uploading}]
+  const paintImgs = () => { imgBox.innerHTML = ""; IMGS.forEach((m, i) => {
+    const d = document.createElement("div"); d.className = "img";
+    d.innerHTML = `<img src="${m.url}"><span class="lb">${m.path ? "#" + (i + 1) : "上传中…"}</span><button class="x" title="去掉">✕</button>`;
+    d.querySelector(".x").onclick = e => { e.stopPropagation(); IMGS.splice(i, 1); paintImgs(); };
+    imgBox.appendChild(d); }); };
+  const addImage = file => new Promise(res => {
+    const fr = new FileReader();
+    fr.onload = async () => {
+      const m = {url: fr.result, path: ""}; IMGS.push(m); paintImgs(); st.textContent = "图片上传中…";
+      try{
+        const r = await (await fetch("/api/paste_image", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({data: fr.result})})).json();
+        if(r.ok){ m.path = r.path; st.textContent = "✓ 图片已存 " + r.path + " (" + Math.round(r.bytes/1024) + " KB)"; }
+        else { IMGS.splice(IMGS.indexOf(m), 1); st.textContent = "✗ 图片没存上: " + (r.why || "未知"); }
+      }catch(e){ IMGS.splice(IMGS.indexOf(m), 1); st.textContent = "✗ 图片没存上: " + e; }
+      paintImgs(); res();
+    };
+    fr.readAsDataURL(file);
+  });
+  ta.addEventListener("paste", e => {
+    const files = [...(e.clipboardData && e.clipboardData.items || [])].filter(x => x.kind === "file" && x.type.startsWith("image/")).map(x => x.getAsFile());
+    if(!files.length) return;
+    e.preventDefault(); files.forEach(addImage);
+  });
+  ta.addEventListener("dragover", e => e.preventDefault());
+  ta.addEventListener("drop", e => {
+    const files = [...(e.dataTransfer && e.dataTransfer.files || [])].filter(f => f.type.startsWith("image/"));
+    if(!files.length) return; e.preventDefault(); files.forEach(addImage);
+  });
+  try{ ta.value = sessionStorage.getItem("draft:" + row.dataset.id) || ""; }catch(e){}
+  ta.addEventListener("input", () => { try{ sessionStorage.setItem("draft:" + row.dataset.id, ta.value); }catch(e){} });
+  // 10-04 用户「应该有个撤回按钮，以防打错字」: 点发送后先等 UNDO_S 秒(可「撤回」放回输入框 / 「立即发」), 再真打进终端;
+  // 排队送达的(对话在跑)送达前还能撤 —— /api/unsend 从收件箱删掉。已打进终端的撤不回(终端已收字)。
+  const btn = (cls, label, fn) => { const b = document.createElement("button"); b.className = "ub " + cls; b.textContent = label; b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
+  const restore = (raw, imgs) => {                 // 撤回: 原文放回输入框(框里已经又打了字就接在前面)
+    ta.value = raw + (ta.value.trim() ? " " + ta.value : ""); IMGS.splice(0, 0, ...imgs); paintImgs(); ta.focus();
+    try{ sessionStorage.setItem("draft:" + row.dataset.id, ta.value); }catch(e){} };
+  const send = () => {
+    if(IMGS.some(m => !m.path)){ st.textContent = "图片还在上传, 稍等…"; return; }
+    const imgs = IMGS.map((m, i) => `[图片 #${i + 1}: ${m.path}]`).join(" ");
+    const raw = ta.value, text = (raw.trim() + (imgs ? " " + imgs : "")).trim(); if(!text) return;
+    const keptImgs = IMGS.slice();
+    const L = (SENT[row.dataset.id] = SENT[row.dataset.id] || []), mine = {text: text.split(/\s+/).join(" "), t: Date.now(), hold: true};
+    L.push(mine); renderTree(row.querySelector(".tree"));          // 先画占位轮
+    ta.value = ""; IMGS.length = 0; paintImgs(); try{ sessionStorage.removeItem("draft:" + row.dataset.id); }catch(e){}
+    let left = UNDO_S, fired = false;
+    const drop = () => { const i = L.indexOf(mine); if(i >= 0) L.splice(i, 1); renderTree(row.querySelector(".tree")); };
+    const sec = document.createElement("b");      // 倒计时只改这个数字, 按钮不重建(重建会让鼠标下的按钮闪)
+    const paint = () => { st.textContent = "⏳ "; sec.textContent = left; st.append(sec, ` 秒后发出「${mine.text.slice(0, 30)}${mine.text.length > 30 ? "…" : ""}」 `, btn("undo", "↶ 撤回", undo), btn("now", "立即发", fire)); };
+    const tk = setInterval(() => { left--; if(left <= 0) fire(); else sec.textContent = left; }, 1000);
+    function undo(){ if(fired) return; fired = true; clearInterval(tk); drop(); restore(raw, keptImgs); st.textContent = "↶ 已撤回, 原文放回输入框了"; }
+    async function fire(){
+      if(fired) return; fired = true; clearInterval(tk);
+      mine.hold = false; mine.t = Date.now(); renderTree(row.querySelector(".tree")); st.textContent = "发送中…";
+      let r;
+      try{ r = await (await fetch("/api/send", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: row.dataset.id, text})})).json(); }
+      catch(e){ r = {ok: false, why: String(e)}; }
+      if(!r.ok){ drop(); restore(raw, keptImgs); st.textContent = "✗ 没发出去(原文已放回输入框): " + (r.why || r.error || "未知"); return; }
+      if(r.mode === "queued"){ mine.queued = true; renderTree(row.querySelector(".tree")); }
+      st.textContent = (r.mode === "typed" ? "✓ 已打进终端 " : "✓ 已排队 ") + hhmmss(Date.now()) + " · " + (r.why || "") + " ";
+      if(r.mode === "queued" && r.id) st.append(btn("undo", "↶ 撤回", async () => {
+        let u; try{ u = await (await fetch("/api/unsend", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: row.dataset.id, mid: r.id})})).json(); }
+        catch(e){ u = {ok: false, why: String(e)}; }
+        if(u.ok){ drop(); restore(raw, keptImgs); st.textContent = "↶ " + u.why + ", 原文放回输入框了"; }
+        else st.textContent = "✗ " + (u.why || "撤不回");
+      }));
+    }
+    paint();
+  };
+  go.onclick = e => { e.stopPropagation(); send(); };
+  ta.addEventListener("keydown", e => { if(e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); } });
+  c.addEventListener("click", e => e.stopPropagation());
+}
+document.addEventListener("keydown", e => { if(e.key === "Escape" && FOCUS && !e.target.closest("textarea,input")) setFocus(null); });
+$("#railBtn").onclick = () => $("#rail").classList.toggle("open");
+// ── 10-04 ＋ 新对话(用户「加一个开新对话功能…默认也在vscode开」) ──
+$("#btnNew").onclick = () => {
+  const P = $("#newPanel"); P.hidden = !P.hidden; if(P.hidden) return;
+  const seen = []; ROWS.forEach(r => { if(r.cwd && !seen.includes(r.cwd)) seen.push(r.cwd); });
+  $("#npCwds").innerHTML = seen.slice(0, 20).map(c => `<option value="${esc(c)}">`).join("");
+  if(!$("#npCwd").value) $("#npCwd").value = seen[0] || "";
+  $("#npSt").textContent = ""; $("#npText").focus();
+};
+$("#npCancel").onclick = () => { $("#newPanel").hidden = true; };
+// 10-04 用户「开对话应该也可以直接回车开始」: 面板里任何位置(目录框、单选、第一句话)回车都开始; 第一句话里 Shift+Enter 换行
+$("#newPanel").addEventListener("keydown", e => { if(e.key === "Enter" && !e.shiftKey && !e.isComposing && !e.target.closest("button")){ e.preventDefault(); $("#npGo").click(); } });
+$("#npGo").onclick = async () => {
+  const cwd = $("#npCwd").value.trim(), text = $("#npText").value.trim(), where = (document.querySelector('[name=npWhere]:checked') || {}).value || "vscode";
+  // 秒开: 面板立刻关掉、输入清空, 马上可以再开下一个; 后台等它起来, 起来了切过去一次
+  $("#newPanel").hidden = true; $("#npText").value = ""; $("#npSt").textContent = "";
+  const t0 = Date.now(), me = {t0, cwd, text};
+  OPENING.push(me); paintRail();
+  let r; try{ r = await (await fetch("/api/new", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({cwd, text, where})})).json(); }
+  catch(e){ r = {ok: false, why: String(e)}; }
+  OPENING = OPENING.filter(o => o !== me); paintRail();
+  if(!r.ok){
+    if(text && !$("#npText").value) $("#npText").value = text;        // 第一句话不丢: 放回面板
+    toast("新对话没开成(" + (cwd || "~") + "): " + (r.why || "失败") + (text ? " —— 第一句话已放回「＋ 新对话」面板" : "")).done("新对话没开成: " + (r.why || "失败"), false);
+    return;
+  }
+  // 第一句话之前它还没有 jsonl, 列表里没有它 —— 先放一个占位行, 单对话视图照样能发话; 有了 jsonl 后 load() 换成真行
+  if(!ROWS.some(x => x.id === r.sid)) ROWS.unshift({id: r.sid, cwd: r.cwd, title: "", label: "", first: text || "(新对话)", mtime: Date.now()/1000, topics: [], arts: [], note: ""});
+  if(text) (SENT[r.sid] = SENT[r.sid] || []).push({text: text.split(/\s+/).join(" "), t: t0});
+  await pollStatus();
+  await setFocus(r.sid);
+  $("#stat").textContent = `新对话已开 (${r.ms} ms)` + (r.sent ? (r.sent.ok ? " · 第一句已发出" : " · 第一句没发出: " + r.sent.why) : "");
+  setTimeout(load, 4000);
+};
+{ const root = document.documentElement, KEY = "railW", d = $("#railDrag");
+  const setW = w => { w = Math.round(Math.max(160, Math.min(w, innerWidth * 0.7))); root.style.setProperty("--railw", w + "px"); return w; };
+  try{ const w = Number(localStorage.getItem(KEY)); if(w) setW(w); }catch(e){}
+  d.addEventListener("pointerdown", e => {
+    e.preventDefault(); d.setPointerCapture(e.pointerId); d.classList.add("on"); document.body.classList.add("dragging");
+    const mv = ev => setW(ev.clientX);
+    const up = ev => { d.removeEventListener("pointermove", mv); d.removeEventListener("pointerup", up); d.classList.remove("on"); document.body.classList.remove("dragging");
+      try{ localStorage.setItem(KEY, String(setW(ev.clientX))); }catch(err){} };
+    d.addEventListener("pointermove", mv); d.addEventListener("pointerup", up);
+  });
+  d.addEventListener("dblclick", () => { setW(260); try{ localStorage.removeItem(KEY); }catch(e){} });
+}
+function headerH(){ document.documentElement.style.setProperty("--hh", document.querySelector("header").offsetHeight + "px"); }
+window.addEventListener("resize", headerH); headerH();
+{ const _r = render, _p = paintStatus;
+  render = function(){ const out = _r.apply(this, arguments); paintRail(); return out; };
+  paintStatus = function(){ const out = _p.apply(this, arguments); paintRail(); return out; }; }
+
+// ── 10-04 到顶/到底按钮 + 开关反馈 toast ──
+$("#jTop").onclick = () => scrollTo({top: 0, behavior: "instant"});
+$("#jBot").onclick = () => scrollTo({top: document.body.scrollHeight, behavior: "instant"});
+// toast(文字) → {set(文字), done(文字, ok)}: 进行中每秒走表; 结束后 6 秒淡出(失败的 15 秒)
+function toast(msg){
+  const el = document.createElement("div"); el.className = "toast";
+  const t0 = Date.now(); let fin = false;
+  const body = document.createElement("span"), tm = document.createElement("span"); tm.className = "tm";
+  el.append(body, tm); $("#toasts").appendChild(el); body.textContent = msg;
+  const tick = () => { if(!fin){ tm.textContent = hms((Date.now() - t0)/1000); setTimeout(tick, 1000); } };
+  tick();
+  return {
+    t0,
+    set(m){ body.textContent = m; },
+    done(m, ok){
+      fin = true; body.textContent = m; el.classList.add(ok ? "ok" : "bad");
+      tm.textContent = "用时 " + ((Date.now() - t0)/1000).toFixed(1) + " 秒";
+      setTimeout(() => { el.style.opacity = 0; setTimeout(() => el.remove(), 500); }, ok ? 6000 : 15000);
+    },
+  };
+}
+// 等状态里出现/消失某个窗口(开: claude 进程真起来了; 关: 进程真没了)。→ true / false(超时)
+async function waitWins(id, pred, ms){
+  const end = Date.now() + ms;
+  while(Date.now() < end){
+    await pollStatus();
+    if(pred((STATUS[id] && STATUS[id].wins) || [])) return true;
+    await new Promise(r => setTimeout(r, 600));
+  }
+  return false;
+}
+function nameOf(rec){ return (rec && (rec.title || rec.auto_title || (rec.id || "").slice(0, 8))) || ""; }
+
 load();                              // load() 内部会接着调一次 pollStatus
-setInterval(pollStatus, 2000);
-document.addEventListener("visibilitychange", () => { if(!document.hidden) pollStatus(); });      // 实时状态: 2 秒一刷, 只重画徽章不重画整表
+// 实时状态: 事件推送(SSE /api/status/stream; 在跑/等你 与 VS Code 标签 ▶ 同源, 用户 10-04「用事件中断」), 只重画徽章不重画整表。
+// 服务端没有推送(公开版缺 turn_push → 404)就退回 2 秒轮询; 另 30 秒兜底一次防断线。
+let POLL_T = null;
+function startPolling(){ if(!POLL_T) POLL_T = setInterval(pollStatus, 2000); }
+try{
+  const es = new EventSource("/api/status/stream");
+  es.addEventListener("status", () => pollStatus());
+  es.onerror = () => { if(es.readyState === 2) startPolling(); };
+}catch(e){ startPolling(); }
+setInterval(pollStatus, 30000);
+document.addEventListener("visibilitychange", () => { if(!document.hidden) pollStatus(); });
 // 列表本身 1 分钟刷一次 —— 但重画会把展开的全文/建议冲掉, 正在看就先不刷
 setInterval(() => {
   if(document.hidden) return;
   if(document.querySelector(".tree.on, .adv.on")) return;
+  if(document.activeElement && document.activeElement.closest && document.activeElement.closest("#list textarea, #list input")) return;   // 正在打注释/标题, 重画会冲掉
   if(ADVISING.size) return;                 // 有复盘正在跑, 更不能重画
   load();
 }, 60000);

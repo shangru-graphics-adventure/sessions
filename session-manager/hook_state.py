@@ -256,6 +256,46 @@ def last_assistant_text(transcript_path, tail_bytes=300_000):
     return ""
 
 
+MIDTURN_MIN_GAP_S = 600          # 两次进行中更新至少隔 10 分钟
+MIDTURN_MIN_GROW = 100_000       # 且会话记录(jsonl)至少又长了 100 KB —— 「较长思考」的近似; 脉络脚本里还有回复增长 4,000 字的二道门
+
+
+def midturn_outline(sid, data):
+    """进行中的一轮: 记录够长且隔得够久就后台拉起 outline.py(它会把仍在进行的最后一轮当新内容重写)。"""
+    if "titler" in os.path.normcase(data.get("cwd") or ""):
+        return                                       # 脉络/起标题自己的一次性会话, 防自激
+    tp = data.get("transcript_path") or ""
+    try:
+        size = os.path.getsize(tp)
+    except OSError:
+        return
+    trig = os.path.join(HERE, "state", "outline", sid + ".trig")
+    now = time.time()
+    try:
+        with io.open(trig, encoding="utf-8") as fh:
+            last = json.load(fh)
+    except Exception:
+        last = None
+    if last is None:                                 # 第一次见到这个会话: 只记基线, 不触发
+        _write_trig(trig, now, size)
+        return
+    if now - float(last.get("t") or 0) < MIDTURN_MIN_GAP_S or size - int(last.get("size") or 0) < MIDTURN_MIN_GROW:
+        return
+    _write_trig(trig, now, size)
+    import outline
+    outline.spawn(sid)
+    log("midturn outline spawn %s (+%d KB)" % (sid[:8], (size - int(last.get("size") or 0)) // 1024))
+
+
+def _write_trig(path, t, size):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with io.open(path, "w", encoding="utf-8") as fh:
+            json.dump({"t": t, "size": size}, fh)
+    except Exception:
+        pass
+
+
 def main():
     event = sys.argv[1] if len(sys.argv) > 1 else "unknown"
     # **必须读原始字节再按 UTF-8 解码**, 不能用 sys.stdin.read()。
@@ -281,6 +321,15 @@ def main():
     sid = data.get("session_id")
     if not sid:
         log("%s: no session_id, keys=%s" % (event, sorted(data.keys())))
+        return
+
+    if event == "PostToolUse":
+        # 10-04 用户「可以在每次较长思考之后，更新这个脉络」: 一轮干几个小时时, Stop 才更新就太晚。
+        # 每次工具调用后只做两次 stat(微秒级), 不碰会话状态文件(否则「最后事件」被刷成工具调用, 干扰运行状态显示)。
+        try:
+            midturn_outline(sid, data)
+        except Exception as e:
+            log("midturn outline: %s" % e)
         return
 
     try:
@@ -327,6 +376,14 @@ def main():
                          ("pid", "pid_ctime", "term_pid", "term_name", "hwnd", "win_title", "win_owner",
                           "shell_pid", "shell_name")})
     elif event == "Stop":
+        # 10-04: 每次回答完拉起后台话题脉络更新(outline.py, 无窗口; 话题没变只挪水位)。
+        # 排除 titler/ 下的一次性 claude -p 会话(脉络/复盘/起标题自己产生的) —— 否则它们的 Stop 又会拉起脉络, 自激
+        try:
+            if "titler" not in os.path.normcase(data.get("cwd") or ""):
+                import outline
+                outline.spawn(sid)
+        except Exception as e:
+            log("outline spawn: %s" % e)
         rec["state"] = "done"
         rec["note"] = ""
         rec["result"] = last_assistant_text(data.get("transcript_path"))

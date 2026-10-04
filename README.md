@@ -9,11 +9,16 @@
 |---|---|---|
 | [`session-manager/`](session-manager/) | 8720 | 本机**所有** Claude Code 对话的总目录：讲过哪些话题、交付了什么文件、哪些窗口此刻还活着，一键 resume / 切回已开着的窗口 / 关掉它 |
 | [`vscode-bridge/`](vscode-bridge/) | 8721 | 可选的 VS Code 扩展：让上面那个能**点到具体哪个终端标签页**（标签没有窗口句柄，只有扩展 API 够得着） |
-| [`tab-naming/`](tab-naming/) | — | 给每个 VS Code 终端标签起「一眼看出在干什么」的名字（交接带版本号）、分割线把「在跑 / 等你回答」分开、只在真正轮到你时响铃（需要上面的桥） |
+| [`tab-naming/`](tab-naming/) | — | 给每个 VS Code 终端标签起「一眼看出在干什么」的名字（交接带版本号）、还在跑的标签前加 ▶（改控制台标题，不切不闪）、只在真正轮到你时响铃；「在跑 / 等你」状态写成一份文件并经 SSE 推给对话管理器 |
+| [`exthost-reloader/`](exthost-reloader/) | — | 可选的 VS Code 小扩展：脚本 `touch ~/.claude/scripts/vscode_reload_request` 就重启扩展宿主（终端不断），改过本地扩展不用手动重载 |
 | [`ticket-desk/`](ticket-desk/) | 8730 | 个人任务计时台：记下达时刻、按秒表、子任务时间**按区间并集**并进父级（同时跑只算一份） |
 
-两个各自独立跑，装哪个都行。放在一个仓库里，是因为它们回答同一个问题的两半：
+几个工具各自独立跑，装哪个都行。放在一个仓库里，是因为它们回答同一个问题的几个部分：
 **「我刚才在干什么、干了多久、东西在哪」**。
+
+> 姊妹仓库 [ticketdesk](https://github.com/shangru-graphics-adventure/ticketdesk)：给「人 + 多个 AI agent」的跨对话 ticket 台
+> （问题 / 回答卡、需要人批准的提案、可撤回的知识条目、agent 问你的问题与「待我」页、流水账）。对话管理器的发送框、
+> ticketdesk 的回答都经同一个 VS Code 桥打进对话。
 
 ---
 

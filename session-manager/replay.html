@@ -1,0 +1,392 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>完整回放 · Claude 对话管理器</title>
+<style>
+:root{
+  --bg:#0F1216; --rail:#141920; --card:#171D25; --sunk:#1D242E;
+  --fg:#DDE3EA; --fg2:#AFBAC6; --dim:#7E8B99; --faint:#5B6773;
+  --line:#232B35; --line2:#37424F;
+  --user:#7FB2F0; --user-bg:#132234;
+  --queued:#F0A868; --queued-bg:#2A1E12;
+  --asst:#7ED9B0; --asst-bg:#0F2620;
+  --think:#8E7CC3; --tool:#E0B458; --res:#8FA3B5; --err:#E0796B; --gold:#E8B93A;
+  --c-cmd:#8CD98C; --c-path:#7FC4E8; --c-num:#E0B458; --c-err:#E0796B;
+  --c-key:#B99BE0; --c-str:#C7D98C; --c-mark:#F0A868;
+  --mono:ui-monospace,'JetBrains Mono','Cascadia Mono',Consolas,'Noto Sans Mono CJK SC',monospace;
+  --sans:system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --rail-w:340px;
+}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
+  --bg:#F7F8FA; --rail:#EEF1F4; --card:#FFFFFF; --sunk:#E7EBEF;
+  --fg:#151A20; --fg2:#3D4650; --dim:#6B7784; --faint:#95A1AD;
+  --line:#DDE2E8; --line2:#BCC5CF;
+  --user:#1B5FAE; --user-bg:#E4EDF8; --queued:#9A5A12; --queued-bg:#F8EEDF;
+  --asst:#1D6B4E; --asst-bg:#E2F0E9;
+  --think:#5E4B96; --tool:#8A6512; --res:#4A5763; --err:#A8382A; --gold:#9A7A12;
+  --c-cmd:#1E6B2E; --c-path:#155E8A; --c-num:#8A6512; --c-err:#A8382A;
+  --c-key:#5E3F96; --c-str:#5A6B12; --c-mark:#9A5A12;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px}
+.shell{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);min-height:100vh}
+.rail{background:var(--rail);border-right:1px solid var(--line);position:sticky;top:0;height:100vh;
+  overflow-y:auto;overflow-x:hidden;padding:0 0 40px}
+.pane{min-width:0;padding:14px 20px 80px}
+@media(max-width:900px){
+  .shell{grid-template-columns:1fr}
+  .rail{position:fixed;left:0;top:0;width:min(92vw,360px);z-index:60;transform:translateX(-102%);
+    transition:transform .18s;box-shadow:0 0 40px rgba(0,0,0,.5)}
+  .rail.open{transform:none}
+  .mt{display:inline-flex!important}
+}
+.mt{display:none;position:fixed;left:12px;bottom:14px;z-index:70;font-family:var(--mono);font-size:13px;
+  padding:9px 14px;border:1px solid var(--line2);border-radius:3px;background:var(--card);color:var(--fg);cursor:pointer}
+.railhd{position:sticky;top:0;background:var(--rail);border-bottom:1px solid var(--line);padding:10px 12px;z-index:5}
+.railhd .t{font-weight:700;font-size:14px}
+.railhd .s{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:3px;line-height:1.5}
+.railhd input{width:100%;margin-top:7px;font-family:var(--sans);font-size:13px;padding:5px 8px;
+  border:1px solid var(--line2);border-radius:3px;background:var(--bg);color:var(--fg)}
+.rbtns{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap}
+.rbtns button{font-family:var(--mono);font-size:10.5px;padding:3px 8px;border:1px solid var(--line2);
+  border-radius:3px;background:var(--card);color:var(--dim);cursor:pointer}
+.rbtns button[aria-pressed="true"]{background:var(--gold);border-color:var(--gold);color:#000}
+.tn{display:flex;gap:4px;align-items:flex-start;padding:3px 8px 3px 0;cursor:pointer;color:var(--fg2);
+  border-left:3px solid transparent;line-height:1.4;font-size:12.5px}
+.tn:hover{background:var(--sunk)}
+.tn.sel{background:var(--user-bg);border-left-color:var(--user);color:var(--user);font-weight:700}
+.tn .car{flex:0 0 13px;text-align:center;color:var(--faint);font-family:var(--mono);font-size:9.5px;padding-top:2px}
+.tn .lbl{flex:1;min-width:0;overflow-wrap:anywhere}
+.tn .cnt{flex:0 0 auto;font-family:var(--mono);font-size:9px;color:var(--faint);padding-top:2px}
+/* 缩进由 .kids 逐层嵌套累加, 不手算 padding; 竖线画在组上, 一条贯穿到底 */
+.tn.l0{padding-left:6px;font-weight:600;color:var(--fg);font-size:13px;margin-top:6px}
+.tn.l1{padding-left:6px}
+.tn.l2{padding-left:6px;font-weight:700;color:var(--fg);font-size:12px;
+  letter-spacing:.4px;margin-top:4px}
+.tn.l3{padding-left:6px}
+.tn.l4{padding-left:6px;font-size:11px;color:var(--dim)}
+/* 每一级标签都不许换行 —— 折行会伪装成一个没有箭头的子节点 */
+.tn.l2 .lbl,.tn.l3 .lbl,.tn.l4 .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn .car.leaf{opacity:.3}
+.tn .sub{color:var(--faint);font-weight:400;letter-spacing:0}
+.tn .grp{color:var(--faint);font-style:italic}
+.tn.sysrow{opacity:.45}
+.tn.qrow .lbl{color:var(--queued)}
+.kids{display:none;margin-left:15px;border-left:1px solid var(--line)}
+.kids.open{display:block}
+.kids .kids{border-left-color:var(--line)}
+.kids > .tn:hover{background:var(--sunk)}
+.star{color:var(--gold);font-size:10px;flex:0 0 auto;padding-top:1px}
+.bar{display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:8px;background:var(--sunk);
+  border:1px solid var(--line);border-radius:3px;margin-bottom:10px;position:sticky;top:0;z-index:4}
+.bar input{font-family:var(--sans);font-size:13px;padding:5px 9px;border:1px solid var(--line2);
+  border-radius:3px;background:var(--bg);color:var(--fg);min-width:170px;flex:1}
+.bar button{font-family:var(--mono);font-size:11px;padding:4px 9px;border:1px solid var(--line2);
+  background:var(--card);color:var(--dim);border-radius:3px;cursor:pointer}
+.bar button[aria-pressed="true"]{background:var(--user);border-color:var(--user);color:var(--bg)}
+.bar .big{font-weight:700;padding:5px 12px;border-color:var(--asst);color:var(--asst)}
+.bar .big[aria-pressed="true"]{background:var(--asst);color:var(--bg)}
+.bar .info{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.ev{border-left:3px solid var(--line2);padding:6px 0 6px 11px;margin:8px 0;scroll-margin-top:58px}
+.ev.hit{outline:2px solid var(--user);outline-offset:5px;border-radius:2px}
+.ev .h{font-family:var(--mono);font-size:10px;color:var(--faint);display:flex;flex-wrap:wrap;gap:8px;
+  align-items:center;margin-bottom:4px}
+.ev .h b{font-weight:700;letter-spacing:.04em}
+.ev pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.56;white-space:pre-wrap;
+  overflow-wrap:anywhere;color:var(--fg2)}
+.ev.user{border-left-color:var(--user);background:linear-gradient(90deg,var(--user-bg),transparent 62%)}
+.ev.user pre{color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.66}
+.ev.user .h b{color:var(--user)}
+.ev.queued{border-left-color:var(--queued);background:linear-gradient(90deg,var(--queued-bg),transparent 62%)}
+.ev.queued pre{color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.66}
+.ev.queued .h b{color:var(--queued)}
+.ev.asst{border-left-color:var(--asst);background:linear-gradient(90deg,var(--asst-bg),transparent 62%)}
+.ev.asst pre{color:var(--fg);font-family:var(--sans);font-size:13.6px;line-height:1.64}
+.ev.asst .h b{color:var(--asst)}
+.ev.think{border-left-color:var(--think);opacity:.72}.ev.think .h b{color:var(--think)}
+.ev.tool{border-left-color:var(--tool)}.ev.tool .h b{color:var(--tool)}
+.ev.tool pre,.ev.res pre{background:var(--card);border:1px solid var(--line);border-radius:3px;padding:8px 10px}
+.ev.res{border-left-color:var(--res)}.ev.res .h b{color:var(--res)}
+.ev.res.bad{border-left-color:var(--err)}.ev.res.bad .h b{color:var(--err)}
+.ev.sysrow{opacity:.55}
+.ev pre.clip{max-height:20em;overflow:hidden;position:relative}
+.ev pre.clip::after{content:"";position:absolute;left:0;right:0;bottom:0;height:4em;
+  background:linear-gradient(transparent,var(--card))}
+.ev.user pre.clip::after,.ev.asst pre.clip::after,.ev.queued pre.clip::after{
+  background:linear-gradient(transparent,var(--bg))}
+.c-cmd{color:var(--c-cmd)} .c-path{color:var(--c-path)} .c-num{color:var(--c-num)}
+.c-err{color:var(--c-err);font-weight:700} .c-key{color:var(--c-key)} .c-str{color:var(--c-str)}
+.c-mark{color:var(--c-mark);font-weight:700}
+.ev a{color:var(--user);text-decoration:underline;text-underline-offset:2px}
+.hitmark{color:var(--gold)}
+.more{font-family:var(--mono);font-size:11px;color:var(--user);cursor:pointer;border:none;background:none;padding:4px 0}
+.pg{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:18px 0;padding-top:12px;border-top:1px solid var(--line)}
+.pg button{font-family:var(--mono);font-size:11.5px;padding:5px 11px;border:1px solid var(--line2);
+  background:var(--card);color:var(--fg2);border-radius:3px;cursor:pointer}
+.pg button:disabled{opacity:.35;cursor:default}
+.pg .now{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+.empty{color:var(--dim);font-family:var(--mono);font-size:13px;padding:40px 0;text-align:center}
+.hintbar{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:-4px 0 10px}
+a{color:var(--user)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<div class="shell">
+  <aside class="rail" id="rail">
+    <div class="railhd"><div class="t">完整回放</div>
+      <div class="s" id="sub">选一个会话</div>
+      <input id="fs" placeholder="筛会话" autocomplete="off">
+      <div class="rbtns">
+        <button id="os" aria-pressed="false" hidden>★ 只看关键词</button>
+        <button id="ns" aria-pressed="false">隐藏系统回显</button>
+      </div></div>
+    <div id="tree"></div>
+  </aside>
+  <main class="pane" id="pane"><div class="empty">← 左边选一个会话</div></main>
+</div>
+<button class="mt" id="mt">☰ 目录</button>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var esc=function(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})};
+/* ★ 关键词: 网址 ?kw=词1|词2 设置(记在本浏览器); 命中的会话在左栏打星, 事件头标出命中词。没设就不显示这个按钮 */
+var KW=new URLSearchParams(location.search).get('kw');
+try{ if(KW!==null) localStorage.setItem('replay_kw',KW); else KW=localStorage.getItem('replay_kw')||''; }catch(e){ KW=KW||''; }
+var KWQ=encodeURIComponent(KW);
+var SESS=[],STAR={},sid=null,OUT=null,open={},frm=0,PER=60,
+    kinds={user:1,queued:1,asst:1,think:0,tool:1,res:1},
+    q='',hit=null,fsq='',onlyStar=false,noSys=false,concl=false;
+var KN={user:['❯','我说'],queued:['❯❯','我插话'],asst:['●','Claude'],
+        think:['⋯','思考'],tool:['⚙','工具'],res:['↳','返回']};
+
+fetch('/api/sessions?limit=4000').then(function(r){return r.json()}).then(function(d){
+  SESS=d.rows||[];tree();
+  var u=new URLSearchParams(location.search).get('id');if(u)pick(u);
+});
+/* ★ 一次缓存扫描, 不再开三个 7 秒的 grep */
+if(KW){ $('os').hidden=false; $('os').title='关键词: '+KW+'(网址 ?kw=a|b 修改)';
+fetch('/api/starred?kw='+KWQ).then(function(r){return r.json()}).then(function(d){
+  STAR=d.map||{};tree();}); }
+$('fs').addEventListener('input',function(){fsq=this.value.trim();tree()});
+$('os').addEventListener('click',function(){onlyStar=!onlyStar;
+  this.setAttribute('aria-pressed',String(onlyStar));tree()});
+$('ns').addEventListener('click',function(){noSys=!noSys;
+  this.setAttribute('aria-pressed',String(noSys));if(sid){pick(sid)}else{tree()}});
+$('mt').addEventListener('click',function(){$('rail').classList.toggle('open')});
+
+function blob(s){return [s.id,s.first,s.last,s.title,s.auto_title,(s.topics||[]).join(' ')].join(' ')}
+function tree(){
+  var rows=SESS.filter(function(s){return (!fsq||blob(s).indexOf(fsq)>=0)&&(!onlyStar||STAR[s.id])});
+  var h='<div class="tn l0"><span class="car"></span><span class="lbl">会话</span>'+
+        '<span class="cnt">'+rows.length+'/'+SESS.length+'</span></div>';
+  rows.slice(0,300).forEach(function(s){
+    var t=new Date(s.mtime*1000).toISOString().slice(0,16).replace('T',' ');
+    var ttl=s.title||s.auto_title||(s.first||'').replace(/\s+/g,' ').slice(0,34);
+    h+='<div class="tn l1'+(s.id===sid?' sel':'')+'" data-s="'+s.id+'">'+
+       car(true,s.id===sid&&open['s:'+sid]!==false)+
+       (STAR[s.id]?'<span class="star">★</span>':'')+
+       '<span class="lbl">'+esc(t)+'　'+esc(ttl)+'</span>'+
+       '<span class="cnt">'+Math.round(s.kb/1024)+'M</span></div>';
+    if(s.id===sid&&OUT){var sop=open['s:'+sid]!==false;
+      h+='<div class="kids'+(sop?' open':'')+'">'+days()+'</div>'}
+  });
+  $('tree').innerHTML=h;
+}
+function car(has,op){
+  return '<span class="car'+(has?'':' leaf')+'">'+(has?(op?'\u25be':'\u25b8'):'\u00b7')+'</span>';
+}
+function turnRow(t,lv){
+  var top=open['t:'+t.i]===true, has=t.steps.length>0;
+  var h='<div class="tn l'+lv+(t.sys?' sysrow':'')+(t.k==='queued'?' qrow':'')+
+    '" data-t="'+t.i+'">'+car(has,top)+
+    (t.hit?'<span class="star">\u2605</span>':'')+
+    '<span class="lbl">'+esc(t.ts.slice(11,16))+' '+
+    (t.k==='queued'?'\u276f\u276f ':'')+esc(t.q.slice(0,30))+'</span>'+
+    '<span class="cnt">'+t.n+'</span></div>';
+  if(has){
+    h+='<div class="kids'+(top?' open':'')+'">';
+    t.steps.forEach(function(st){
+      h+='<div class="tn l'+(lv+1)+'" data-i="'+st.i+'">'+
+         '<span class="car leaf">'+(KN[st.k]?KN[st.k][0]:'\u00b7')+'</span>'+
+         (st.hit?'<span class="star">\u2605</span>':'')+
+         '<span class="lbl">'+esc(st.ts)+' '+esc(st.s.slice(0,44))+'</span></div>';
+    });
+    h+='</div>';
+  }
+  return h;
+}
+function days(){
+  var h='';
+  (OUT.days||[]).forEach(function(D){
+    var dk='d:'+D.d, dop=open[dk]!==false;
+    var real=D.turns.filter(function(t){return !t.sys});
+    var gist=real.length?real[0].q.slice(0,18):'(整天只有系统回显)';
+    h+='<div class="tn l2" data-d="'+D.d+'">'+car(true,dop)+
+       (D.hit?'<span class="star">\u2605</span>':'')+
+       '<span class="lbl">'+D.d+'\u3000<span class="sub">'+esc(gist)+'\u2026</span></span>'+
+       '<span class="cnt">'+real.length+'\u95ee / '+D.n+'\u5757</span></div>';
+    h+='<div class="kids'+(dop?' open':'')+'">';
+    var T=D.turns, i=0;
+    while(i<T.length){
+      if(T[i].sys){
+        var j=i; while(j<T.length&&T[j].sys){j++}
+        var grp=T.slice(i,j);
+        if(grp.length>1){
+          var gk='g:'+D.d+':'+i, gop=open[gk]===true;
+          h+='<div class="tn l3 sysrow" data-g="'+gk+'">'+car(true,gop)+
+             '<span class="lbl grp">\u7cfb\u7edf\u56de\u663e \u00d7'+grp.length+'\u3000'+
+             esc(grp[0].q.slice(0,16))+'\u2026</span>'+
+             '<span class="cnt">'+grp.reduce(function(a,x){return a+x.n},0)+'</span></div>'+
+             '<div class="kids'+(gop?' open':'')+'">'+
+             grp.map(function(t){return turnRow(t,4)}).join('')+'</div>';
+        }else{ h+=turnRow(grp[0],3) }
+        i=j; continue;
+      }
+      h+=turnRow(T[i],3); i++;
+    }
+    h+='</div>';
+  });
+  return h;
+}
+$('tree').addEventListener('click',function(e){
+  var n=e.target.closest('.tn');if(!n)return;
+  if(n.dataset.g){open[n.dataset.g]=!open[n.dataset.g];tree();return}
+  if(n.dataset.s){
+    if(n.dataset.s===sid&&e.target.classList.contains('car')){
+      open['s:'+sid]=(open['s:'+sid]===false);tree();return}
+    pick(n.dataset.s);return}
+  if(n.dataset.d!=null){var k='d:'+n.dataset.d;open[k]=(open[k]===false);tree();return}
+  if(n.dataset.t!=null){
+    var k2='t:'+n.dataset.t;
+    if(e.target.classList.contains('car')){open[k2]=!open[k2];tree();return}
+    open[k2]=true;jump(+n.dataset.t);tree();return}
+  if(n.dataset.i!=null){jump(+n.dataset.i)}
+});
+function pick(id){
+  sid=id;frm=0;hit=null;$('pane').innerHTML='<div class="empty">读取中…</div>';
+  fetch('/api/outline?id='+encodeURIComponent(id)+'&kw='+KWQ+'&nosys='+(noSys?1:0))
+   .then(function(r){return r.json()}).then(function(d){
+    OUT=d;var s=SESS.filter(function(x){return x.id===id})[0]||{};
+    $('sub').innerHTML=id.slice(0,8)+' · '+(d.days||[]).length+' 天 · '+d.turns.length+' 轮 · '+
+      d.total.toLocaleString()+' 块 · '+Math.round((s.kb||0)/1024)+' MB'+
+      '<br>其中<b style="color:var(--queued)">插话 '+(d.counts.queued||0)+'</b> · 系统回显 '+(d.counts.sys||0);
+    (d.days||[]).forEach(function(D){if(open['d:'+D.d]===undefined)open['d:'+D.d]=(d.days.length<=2)});
+    tree();load();
+  });
+}
+/* 跳转到第 i 块。**口径必须与 load() 一致**: pos 要在「当前过滤后」的列表里算,
+   因为 frm 是喂给同一套过滤的分页偏移(replay.py events() 先筛后切片)。
+   历史 bug: 这里用 all=true 拿未过滤全量算 pos, 一旦开了搜索/结论模式/取消某个 kind,
+   下标口径就错位, 翻到不相干的一页, E<i> 不在页内 → 点了「没反应」。 */
+function jump(i){
+  fetch(api(0,1e9)).then(function(r){return r.json()}).then(function(d){
+    var pos=idxOf(d,i);
+    if(pos>=0){hit=i;frm=Math.max(0,Math.floor(pos/PER)*PER);load();return}
+    /* 找不到 = 该块被当前过滤挡住了。放宽全部过滤(含隐藏系统回显)后按新口径重找。 */
+    relax();
+    var again=function(){fetch(api(0,1e9)).then(function(r2){return r2.json()}).then(function(d2){
+      var p2=idxOf(d2,i);hit=i;frm=Math.max(0,Math.floor(Math.max(p2,0)/PER)*PER);load()})};
+    if(!OUT){again();return}
+    /* noSys 被清掉后左树的 outline 也得换口径重取(但不重置 hit/frm, 所以不走 pick) */
+    fetch('/api/outline?id='+encodeURIComponent(sid)+'&kw='+KWQ+'&nosys=0')
+      .then(function(r3){return r3.json()}).then(function(o){OUT=o;tree();again()});
+  });
+}
+function idxOf(d,i){for(var k=0;k<d.rows.length;k++){if(d.rows[k].i===i)return k}return -1}
+function relax(){
+  kinds={user:1,queued:1,asst:1,think:1,tool:1,res:1};q='';concl=false;noSys=false;
+  var ns=$('ns');if(ns)ns.setAttribute('aria-pressed','false');
+}
+function api(f,n,all){
+  var ks=Object.keys(kinds).filter(function(k){return kinds[k]}).join(',');
+  return '/api/replay?id='+encodeURIComponent(sid)+'&from='+f+'&n='+n+
+         '&kinds='+encodeURIComponent(all?'':ks)+'&q='+encodeURIComponent(all?'':q)+
+         '&kw='+KWQ+'&nosys='+(noSys?1:0);
+}
+function load(){fetch(api(frm,PER)).then(function(r){return r.json()}).then(render)}
+
+/* ---------- 终端式着色。注意: 转录里**一行 ANSI 都没有**(实测 0), 原色没被记录,
+   这里是按内容推断的重新着色, 不是原色复现。 ---------- */
+function color(t,k){
+  var h=esc(t);
+  h=h.replace(/https?:\/\/[^\s"'<>）)，,；;]+/g,function(u){
+    return '<a href="'+u+'" target="_blank" rel="noopener">'+u+'</a>'});
+  h=h.replace(/(?:[A-Za-z]:\\|\/)(?:[\w .\-]+[\\\/])+[\w .\-]+\.(?:py|md|html|json|jsonl|csv|parquet|txt|ps1|bat|log|js|css)/g,
+    function(p){return '<a class="c-path" href="/file?path='+encodeURIComponent(p)+'" target="_blank">'+p+'</a>'});
+  if(k==='tool'){
+    h=h.replace(/^(\s*)&quot;([\w_]+)&quot;:/gm,'$1<span class="c-key">"$2"</span>:');
+    h=h.replace(/&quot;((?:[^&]|&(?!quot;))*)&quot;/g,'<span class="c-str">"$1"</span>');
+  }else if(k==='res'){
+    h=h.replace(/^(Traceback[^\n]*|.*(?:Error|Exception|错误|失败|FAILED|✗)[^\n]*)$/gm,
+      '<span class="c-err">$1</span>');
+    h=h.replace(/^([^\n]*(?:★|✓|OK\b|通过|成功)[^\n]*)$/gm,'<span class="c-mark">$1</span>');
+    h=h.replace(/\b(\d[\d,]*\.?\d*)\s*(ms|MB|KB|GB|%|张|条|块|天)\b/g,
+      '<span class="c-num">$1 $2</span>');
+    h=h.replace(/^(\s*[\w.\-\/\\]+):(\d+):/gm,'<span class="c-path">$1</span>:<span class="c-num">$2</span>:');
+  }
+  return h;
+}
+function fixClip(){
+  document.querySelectorAll('#pane .ev pre').forEach(function(p){
+    var b=p.nextElementSibling;if(!b||!b.classList.contains('more'))return;
+    if(p.scrollHeight>p.clientHeight+2){b.hidden=false;
+      b.textContent='展开全部 '+p.textContent.split('\n').length+' 行 ▾'}
+    else{p.classList.remove('clip');b.hidden=true}
+  });
+}
+function render(d){
+  var h='<div class="bar"><input id="q" placeholder="搜索全部内容（含工具返回）" value="'+esc(q)+'">';
+  ['user','queued','asst','think','tool','res'].forEach(function(k){
+    h+='<button data-k="'+k+'" aria-pressed="'+(kinds[k]?'true':'false')+'">'+KN[k][0]+' '+KN[k][1]+
+       ' '+((d.counts||{})[k]||0)+'</button>'});
+  h+='<button class="big" id="cc" aria-pressed="'+(concl?'true':'false')+'">'+
+     (concl?'▣ 结论模式':'▢ 只看结论')+'</button>'+
+     '<span class="info">'+d.total.toLocaleString()+' / '+d.all.toLocaleString()+' 块　一字不省</span></div>'+
+     '<div class="hintbar">着色为按内容推断（转录里没有 ANSI 原色，实测 0 行）· '+
+     '<b style="color:var(--queued)">❯❯ 我插话</b> = 你在我干活时发的（存成 queue-operation，早先版本整类漏掉）</div>';
+  if(!d.rows.length)h+='<div class="empty">没有匹配的块</div>';
+  d.rows.forEach(function(e){
+    var K=KN[e.k]||['·',e.k],bad=(e.k==='res'&&!e.ok),txt=e.text||'';
+    var lines=txt.split('\n').length;
+    h+='<div class="ev '+e.k+(bad?' bad':'')+(e.sys?' sysrow':'')+(hit===e.i?' hit':'')+'" id="E'+e.i+'">'+
+      '<div class="h"><b>'+K[0]+' '+K[1]+'</b><span>'+esc(e.ts||'')+'</span>'+
+      (e.name?'<span style="color:var(--tool)">'+esc(e.name)+'</span>':'')+
+      (e.side?'<span style="color:var(--think)">子agent</span>':'')+
+      (e.sys?'<span style="color:var(--faint)">系统回显</span>':'')+
+      (e.hit?'<span class="hitmark">★ '+esc(e.hit)+'</span>':'')+
+      (bad?'<span style="color:var(--err)">错误</span>':'')+
+      '<span>#'+e.i+'</span><span>'+lines+' 行 / '+txt.length.toLocaleString()+' 字</span></div>'+
+      (e.k==='think'&&!txt?'<pre style="opacity:.5">（思考内容未存盘）</pre>':
+        '<pre class="clip">'+color(txt,e.k)+'</pre><button class="more" hidden>展开 ▾</button>')+
+      '</div>';
+  });
+  var pages=Math.max(1,Math.ceil(d.total/PER)),pg=Math.floor(d.frm/PER);
+  h+='<div class="pg"><button data-f="0" '+(pg<=0?'disabled':'')+'>⏮</button>'+
+     '<button data-f="'+Math.max(0,d.frm-PER)+'" '+(pg<=0?'disabled':'')+'>← 上一页</button>'+
+     '<span class="now">第 '+(pg+1)+' / '+pages+' 页</span>'+
+     '<button data-f="'+(d.frm+PER)+'" '+(pg>=pages-1?'disabled':'')+'>下一页 →</button>'+
+     '<button data-f="'+((pages-1)*PER)+'" '+(pg>=pages-1?'disabled':'')+'>⏭</button></div>';
+  $('pane').innerHTML=h;
+  var qi=$('q');
+  qi.addEventListener('input',function(){var c=this.selectionStart;q=this.value;frm=0;
+    clearTimeout(window._t);window._t=setTimeout(function(){load();
+      setTimeout(function(){var e2=$('q');if(e2){e2.focus();try{e2.setSelectionRange(c,c)}catch(x){}}},30)},260)});
+  var cc=$('cc');
+  if(cc)cc.addEventListener('click',function(){concl=!concl;
+    kinds=concl?{user:1,queued:1,asst:1,think:0,tool:0,res:0}
+               :{user:1,queued:1,asst:1,think:0,tool:1,res:1};
+    frm=0;load()});
+  document.querySelectorAll('.bar button[data-k]').forEach(function(b){
+    b.addEventListener('click',function(){kinds[this.dataset.k]=!kinds[this.dataset.k];frm=0;load()})});
+  document.querySelectorAll('.pg button[data-f]').forEach(function(b){
+    b.addEventListener('click',function(){frm=+this.dataset.f;hit=null;load();scrollTo(0,0)})});
+  fixClip();
+  document.querySelectorAll('.more').forEach(function(b){
+    b.addEventListener('click',function(){var p=this.previousElementSibling;
+      var c=p.classList.toggle('clip');
+      this.textContent=c?('展开全部 '+p.textContent.split('\n').length+' 行 ▾'):'收起 ▴'})});
+  if(hit!=null){var el=$('E'+hit);if(el){el.scrollIntoView({block:'center'});
+    setTimeout(function(){el.classList.remove('hit');hit=null},2600)}}
+  if(innerWidth<=900)$('rail').classList.remove('open');
+}
+})();
+</script></body></html>
