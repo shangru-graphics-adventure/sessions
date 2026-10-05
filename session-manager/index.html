@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/icon.svg"><link rel="apple-touch-icon" href="/icon-180.png">
 <title>Claude 对话管理器</title>
 <style>
   /* 配色: 天蓝 + 粉 + 近白底。
@@ -69,6 +70,22 @@
   .rail .it.opening{color:var(--accent);font-style:italic;cursor:default}
   .rail .it .t{flex:1;min-width:0;white-space:normal;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35}
   .rail .it .a{color:var(--dim2);font-size:11px;white-space:nowrap}
+  .etabox{margin:4px 0 6px;padding:6px 10px;border:1px solid var(--accent);border-radius:8px;background:var(--accent-soft);font-size:13px;line-height:1.5}
+  .etabox .elab{font-weight:700;color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  .etabox .ewhat{font-weight:600}
+  .etabox .ebasis{color:var(--dim);font-size:12px}
+  .etabox.over{border-color:var(--danger,#c0392b)} .etabox.over .elab{color:var(--danger,#c0392b)}
+  .etabox.miss{border-style:dashed;border-color:var(--dim);background:none;color:var(--dim)}
+  /* 10-04 用户「徽标太小，搞得更明显一点」: 胶囊底色 + 加粗 + 大一号 */
+  .rail .it .etab{align-self:center;font-size:13px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums;
+    color:#fff;background:var(--accent);border-radius:999px;padding:1px 8px;line-height:1.5;box-shadow:0 0 0 1px rgba(0,0,0,.08)}
+  .rail .it.on .etab{background:#fff;color:var(--accent)}
+  .rail .it .etab.over{background:var(--danger,#c0392b);color:#fff;animation:etapulse 1.6s ease-in-out infinite}
+  .rail .it.on .etab.over{background:#fff;color:var(--danger,#c0392b)}
+  .rail .it .etab.miss{background:none;color:var(--fg2);border:1.5px dashed var(--dim);padding:0 7px}
+  .rail .it.on .etab.miss{color:#fff;border-color:#fff}
+  @keyframes etapulse{50%{opacity:.55}}
+  @media (prefers-reduced-motion:reduce){ .rail .it .etab.over{animation:none} }
   .goalbox{margin:4px 0 6px;padding:6px 10px;border:1px solid var(--star);border-radius:8px;background:color-mix(in srgb,var(--star) 10%,transparent);font-size:13px;line-height:1.5}
   .goalbox .glab{font-weight:700;color:var(--star);margin-right:8px}
   .goalbox .gcond{font-weight:600}
@@ -166,7 +183,7 @@
   /* 实时状态 */
   .st{margin-top:4px;font-size:12.5px;border-radius:6px;padding:4px 8px;
       display:flex;gap:7px;align-items:baseline}
-  .st .dot{flex:none;font-size:9px;line-height:1.6}
+  .st .dot{flex:none;font-size:14px;line-height:1;align-self:center}
   .st .lab{flex:none;font-weight:600}
   .st .txt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg)}
   .st .age{flex:none;color:var(--dim);font-size:11px}
@@ -216,7 +233,7 @@
   .turn .an{margin-top:4px;white-space:pre-wrap;word-break:break-word;color:var(--fg2);
             cursor:pointer;display:-webkit-box;-webkit-line-clamp:3;
             -webkit-box-orient:vertical;overflow:hidden}
-  .turn .an.open{display:block;overflow:auto;max-height:56vh;cursor:auto;
+  .turn .an.open{display:block;overflow:auto;max-height:28vh;cursor:auto;
                  background:var(--panel2);border-radius:3px;padding:6px 8px}
   .turn .an.full{cursor:auto}
   /* .an 自己设了 display, 会盖掉 [hidden] 的 UA 规则 —— 必须显式压回去 */
@@ -253,6 +270,7 @@
   .outline .osum{margin:6px 0 4px;padding:6px 8px;border-left:3px solid var(--accent);background:var(--panel);color:var(--fg);line-height:1.55;font-size:13px}
   /* 10-04 A: 每轮的完成时刻 / 想了多久(从我提问那一刻算), 在跑的那一轮每秒走 */
   .turn .dur{font-family:var(--mono);font-size:10.5px;color:var(--dim2);margin-top:3px}
+  .turn .dur .ico{font-size:12px} .turn .dur:not(.run) .ico.i-pop{color:var(--ok)}
   .turn .dur.run{color:var(--accent)}
   /* 10-04 A: 单对话视图底部的输入框 —— 空闲时经 VS Code 桥打进终端, 在跑时排队由钩子送达(需配 relay) */
   .compose{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:8px 0 10px;margin-top:8px;display:flex;gap:8px;align-items:flex-end}
@@ -262,8 +280,12 @@
   .compose .cst{font-family:var(--mono);font-size:10.5px;color:var(--dim);min-width:0;flex-basis:100%}
   .compose .cwrap{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}
   .compose .crow{display:flex;gap:8px;align-items:flex-end}
-  .compose .imgs{display:flex;flex-wrap:wrap;gap:6px}
-  .compose .imgs:empty{display:none}
+  .compose .imgs,#newPanel .imgs{display:flex;flex-wrap:wrap;gap:6px}
+  .compose .imgs:empty,#newPanel .imgs:empty{display:none}
+  #newPanel .img{position:relative;border:1px solid var(--line2);border-radius:4px;overflow:hidden;height:56px;background:var(--panel)}
+  #newPanel .img img{height:56px;display:block}
+  #newPanel .img .x{position:absolute;top:0;right:0;background:rgba(0,0,0,.6);color:#fff;border:0;font-size:11px;padding:0 4px;cursor:pointer}
+  #newPanel .img .lb{position:absolute;left:0;bottom:0;background:rgba(0,0,0,.6);color:#fff;font-size:10px;padding:0 4px}
   .compose .img{position:relative;border:1px solid var(--line2);border-radius:4px;overflow:hidden;height:56px;background:var(--panel)}
   .compose .img img{height:56px;display:block}
   .compose .img .x{position:absolute;top:0;right:0;background:rgba(0,0,0,.6);color:#fff;border:0;font-size:11px;padding:0 4px;cursor:pointer}
@@ -419,6 +441,18 @@
   .compose{background:linear-gradient(180deg,transparent,var(--bg) 30%)}
   .compose textarea{border-radius:10px}
   .compose textarea:focus{border-color:var(--pink-bright);outline:2px solid var(--pink-soft)}
+  /* 10-04 用户「发送那个纸飞机图标，弄得更漂亮一点」: 渐变圆钮 + 线条纸飞机(图标: Lucide "send", ISC 许可) */
+  .compose .go{flex:0 0 auto;width:42px;height:42px;padding:0;border:0;border-radius:50%;cursor:pointer;
+    display:grid;place-items:center;color:#fff;background:var(--grad);
+    box-shadow:0 6px 16px -6px #f2679a99,0 3px 8px -4px #2ea8e699;transition:transform .16s ease,box-shadow .16s ease,filter .16s ease,opacity .16s ease}
+  .compose .go svg{width:20px;height:20px;transform:translate(-1px,1px);transition:transform .2s ease}
+  .compose .go:hover{transform:translateY(-2px);box-shadow:0 10px 22px -8px #f2679acc,0 4px 10px -4px #2ea8e6aa;filter:saturate(1.15)}
+  .compose .go:hover svg{transform:translate(1px,-1px) rotate(-8deg)}
+  .compose .go:active{transform:scale(.93);box-shadow:0 3px 8px -4px #f2679a99}
+  .compose .go:focus-visible{outline:2px solid var(--accent-bright);outline-offset:3px}
+  .compose .go.empty{opacity:.5;filter:saturate(.6);box-shadow:none}
+  .compose .go.empty:hover{transform:none}
+  @media (prefers-reduced-motion:reduce){ .compose .go,.compose .go svg{transition:none} }
   /* 浮动件 */
   .toast{border-radius:10px;border-left-color:var(--accent-bright);box-shadow:0 6px 20px -8px #1f293340}
   .toast.bad{border-left-color:var(--pink)}
@@ -433,16 +467,16 @@
   ::-webkit-scrollbar-track{background:transparent}
   /* 10-04 用户「“在跑”可以用更活泼的方式表示」: 呼吸圆点 + 卡片左侧粉蓝流动色条 + 状态条缓慢流光 */
   @keyframes livePulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.55);opacity:.55}}
-  @keyframes liveFlow{to{background-position:0 0,0 300%}}
+  @keyframes liveFlow{to{background-position:0 0,0 200%}}
   @keyframes liveSheen{to{background-position:-300% 0}}
-  .st-running .dot{display:inline-block;animation:livePulse 1.3s ease-in-out infinite}
+  .st-running .dot{display:inline-block}
   .st-running:not(.st-stale){border-color:#9fd9c1;
       background:linear-gradient(90deg,var(--ok-bg) 0%,var(--accent-soft) 30%,var(--pink-soft) 50%,var(--ok-bg) 70%,var(--ok-bg) 100%);
       background-size:300% 100%;animation:liveSheen 7s linear infinite}
   .row.live{border-color:var(--line);border-left:4px solid transparent;
       background:linear-gradient(var(--panel),var(--panel)) padding-box,
-                 linear-gradient(180deg,#2ea8e6,#f2679a,#2ea8e6,#f2679a) border-box;
-      background-size:100% 100%,100% 300%;animation:liveFlow 2.4s linear infinite}
+                 linear-gradient(180deg,#2ea8e6 0%,#8fb4ea 25%,#f2679a 50%,#8fb4ea 75%,#2ea8e6 100%) border-box;
+      background-size:100% 100%,100% 200%;animation:liveFlow 4.5s linear infinite}   /* 10-04 用户「粉蓝条闪动太快…要渐变流光」2.4s → 9s, 又「太慢不太看得出来在动」→ 4.5s; 柔和渐变, 首尾同色无缝循环 */
   @media (prefers-reduced-motion:reduce){.st-running .dot,.st-running,.row.live{animation:none}}
   /* 10-04 用户「减少总体ui冗余信息」 */
   details.hint{margin:0 0 10px}
@@ -485,7 +519,8 @@
     <b>＋ 新对话</b>
     <label>工作目录 <input id="npCwd" list="npCwds" placeholder="C:/Users/…"></label>
     <datalist id="npCwds"></datalist>
-    <textarea id="npText" placeholder="第一句话(可留空; Enter 开始, Shift+Enter 换行)"></textarea>
+    <textarea id="npText" placeholder="第一句话(可留空; Enter 开始, Shift+Enter 换行; Ctrl+V / 拖入可加图片)"></textarea>
+    <div class="imgs" id="npImgs"></div>
     <div class="npw">
       <label><input type="radio" name="npWhere" value="vscode" checked> VS Code + 管理器(终端跑, 这里镜像 + 输入)</label>
       <label title="网页托管会话(B 路线)还没做好"><input type="radio" name="npWhere" value="manager" disabled> 只在管理器(B 路线做好后开放)</label>
@@ -514,6 +549,7 @@
 <button id="railBtn">☰ 对话</button>
 
 <script src="/md.js"></script>
+<script src="/icons.js"></script>
 <script src="/xref.js"></script>
 <div id="jump"><button id="jTop" title="到顶部">↑</button><button id="jBot" title="到底部">↓</button></div>
 <div id="toasts"></div>
@@ -673,6 +709,22 @@ function render(hl){
     </div>`;
   }).join("");
   document.querySelectorAll("#list .topics").forEach(el => { el.scrollTop = el.scrollHeight; });   // 默认看最近的提问
+  fillFocus();
+}
+// 10-04 用户「左栏标签按一下右边会先闪出一个小厂房形的块块才展开(有时不展开)」:
+// 原来 setFocus 先 render 出折叠卡片, 等 /api/tree 回来才展开 —— 中间那一帧就是那个小块;
+// 而且 await 期间列表若被重画(load/搜索), 全文画进了已脱离页面的旧行 → 不展开。
+// 现在全文数据按 id 缓存, render() 在同一个任务里直接填好, 任何重画都带着展开态。
+const TREE_CACHE = new Map();          // id -> /api/tree 返回
+function fillFocus(){
+  if(!FOCUS || FOCUS === FOCUS_EMPTY) return;
+  const d = TREE_CACHE.get(FOCUS); if(!d) return;
+  const row = document.querySelector(`.row[data-id="${FOCUS}"]`); if(!row) return;
+  const box = row.querySelector(".tree");
+  box._data = d; box._all = true; box._expand = true;
+  box.style.display = "block"; box.classList.add("on");
+  const btn = row.querySelector('[data-act="tree"]'); if(btn) btn.textContent = "收起全文";
+  renderTree(box); addCompose(row);
 }
 
 // ---- 建议(复盘) --------------------------------------------------------
@@ -864,7 +916,7 @@ function pendingHtml(sid){
   const d = DUR_CTX.box && DUR_CTX.box._data, L = SENT[sid] || [];
   const open = L.filter(m => !delivered(sid, d, m));
   return open.map(m => `<div class="turn pend"><div class="qn"><span class="no">…</span><span class="md qline">${esc(m.text.slice(0, 300))}</span><span class="qt">${hhmmss(m.t)}</span></div>
-    <div class="dur run" data-q="${m.t}" data-pre="${m.hold ? "待发出 · 可撤回 · " : m.queued ? "已排队 · 下一次工具调用后送达 · " : "已送出 · 等它接收 · "}">${m.hold ? "待发出 · 可撤回 · " : m.queued ? "已排队 · 下一次工具调用后送达 · " : "已送出 · 等它接收 · "}${hms((Date.now() - m.t)/1000)}</div></div>`);
+    <div class="dur run" data-q="${m.t}" data-pre="${m.hold ? "待发出 · 可撤回 · " : m.queued ? "已排队 · 下一次工具调用后送达 · " : "已送出 · 等它接收 · "}">${ICO(m.hold ? "hold" : m.queued ? "queued" : "sent")} <span class="tm">${m.hold ? "待发出 · 可撤回 · " : m.queued ? "已排队 · 下一次工具调用后送达 · " : "已送出 · 等它接收 · "}${hms((Date.now() - m.t)/1000)}</span></div></div>`);
 }
 function durHtml(t, no){
   const m = DUR_CTX.sid && sentFor(DUR_CTX.sid, t);
@@ -872,13 +924,13 @@ function durHtml(t, no){
   const box = DUR_CTX.box, last = box && box._data && no === box._data.turns.length;
   const st = DUR_CTX.sid && STATUS[DUR_CTX.sid] ? STATUS[DUR_CTX.sid].state : "";
   // 在跑, 而且这一轮还没有回复(或回复早于提问) —— 否则是上一轮已完成、新提问还没落盘
-  if(last && st === "running" && q && !(e > Date.parse(t.ts || "") && pendingOpen(DUR_CTX.sid))) return `<div class="dur run" data-q="${q}">在跑 · 已 ${hms((Date.now() - q)/1000)}</div>`;
+  if(last && st === "running" && q && !(e > Date.parse(t.ts || "") && pendingOpen(DUR_CTX.sid))) return `<div class="dur run" data-q="${q}">${ICO("run")} <span class="tm">在跑 · 已 ${hms((Date.now() - q)/1000)}</span></div>`;
   if(!q || !e || e < q) return "";
-  return `<div class="dur">完成 ${hhmmss(e)} · 想了 ${hms((e - q)/1000)}</div>`;
+  return `<div class="dur">${ICO("done", "完成时刻")} ${hhmmss(e)} · ${ICO("think", "想了多久(从你提问算起)")} ${hms((e - q)/1000)}</div>`;
 }
 let DUR_CTX = {};
 function pendingOpen(sid){ const d = DUR_CTX.box && DUR_CTX.box._data; return (SENT[sid] || []).some(m => !delivered(sid, d, m)); }
-setInterval(() => document.querySelectorAll(".dur.run").forEach(el => { el.textContent = (el.dataset.pre || "在跑 · 已 ") + hms((Date.now() - Number(el.dataset.q))/1000); }), 1000);
+setInterval(() => document.querySelectorAll(".dur.run").forEach(el => { (el.querySelector(".tm") || el).textContent = (el.dataset.pre || "在跑 · 已 ") + hms((Date.now() - Number(el.dataset.q))/1000); }), 1000);
 
 // 全文的唯一入口: 「全文」按钮 / 点话题行 / 点某条话题的编号 都走这里。
 // opts.all  = 打开时是否直接显示全部提问
@@ -899,11 +951,17 @@ async function openTree(row, opts){
     if(!box._data) box.innerHTML = "读不到: " + esc(String(err));
     return;
   }
+  if(!row.isConnected){                 // 等待期间列表被重画了: 改画到页面上那一行
+    const r2 = document.querySelector(`.row[data-id="${row.dataset.id}"]`);
+    if(!r2) return;
+    if(!d.error) TREE_CACHE.set(row.dataset.id, d);
+    return openTree(r2, opts);
+  }
   if(d.error){
     if(!box._data) box.innerHTML = (STATUS[row.dataset.id] && STATUS[row.dataset.id].state !== "closed") ? '<span class="muted">新对话, 还没有内容 —— 在下面发第一句话</span>' : "读不到这个对话的记录";
     return;
   }
-  box._data = d;
+  box._data = d; TREE_CACHE.set(row.dataset.id, d);
   if(opts.all !== undefined) box._all = opts.all;
   else if(box._all === undefined) box._all = false;   // 展开状态跨重抓保留
   box._expand = !!opts.expand;                         // 「全文」= 每一轮的完整回复都摊开; 点某一轮只展开那一轮
@@ -1009,7 +1067,20 @@ let STATUS = {};
 // 10-04 用户「我希望秒关-你可以先在标签页去掉，关闭失败再弹回来」: 点确认就先把窗口从页面上拿掉(乐观),
 // 后台关; 失败才放回来。CLOSING = 正在关的 claude pid; 任何状态刷新都先把它们剔掉, 免得轮询又画回来。
 const CLOSING = new Set();
+// 10-04 用户「我在文本框发了东西, 就马上转移对话到“正在跑”, 体验要优先于实际工具延迟」:
+// 按下发送就记一笔 KICK, 状态里先当它在跑; 服务端第一次真报「在跑」就交还给服务端, 60 秒没报也交还; 撤回/没发出去立刻交还
+const KICK = new Map();                // id -> 按下发送的 ms
+function kick(id, on){ on ? KICK.set(id, Date.now()) : KICK.delete(id); STATUS = stripClosing(Object.assign({}, RAW_STATUS)); paintStatus(); }
+function applyKick(st){
+  for(const [id, t] of KICK){
+    const s = st[id];
+    if(Date.now() - t > 60000 || (s && s.state === "running") || (s && s.age != null && s.age * 1000 < Date.now() - t)){ KICK.delete(id); continue; }   // 服务端已报在跑, 或按下发送之后钩子又记过账(短回合已跑完) = 交还
+    st[id] = Object.assign({}, s || {wins: []}, {state: "running", sub: "", act_age: 0, age: 0});
+  }
+  return st;
+}
 function stripClosing(st){
+  applyKick(st);
   if(!CLOSING.size) return st;
   for(const k in st){
     const s = st[k]; if(!s || !s.wins) continue;
@@ -1073,7 +1144,48 @@ function goalHtml(s){
     + `<span class="gn">${s.goal_n ? "已判 " + s.goal_n + " 次未达成" : "刚设定"}</span>${why}`
     + `<div class="ghint">它每轮结束都会被停止钩子拦回去继续干, 直到判定达成。要停掉: 到这个对话的<b>终端里亲手敲</b> <code>/goal clear</code> —— 从这里发过去的「/goal clear」只是一句普通文字, 不生效。</div></div>`;
 }
-function stHtml(s){ const h = stHtml0(s); return h && goalHtml(s) + h; }
+// 10-04 用户「各个对话有较长计算的能否都给个时间预期，显示到对话管理器上：还有多长时间返回结果（全局规矩）」
+// 对话用 claude_sessions/eta.py 上钟 → /api/status 的 eta; 没上钟却在长跑 → eta_missing
+function mmss(sec){ sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), x = sec%60;
+  return h ? `${h}时${String(m).padStart(2,"0")}分` : m ? `${m}分${String(x).padStart(2,"0")}秒` : `${x}秒`; }
+function etaText(end, start, est){
+  const now = Date.now()/1000, left = end - now, used = now - start;
+  if(left >= 0) return `还要约 ${mmss(left)} · 已用 ${mmss(used)}`;
+  const over = used / Math.max(1, est);
+  return `已超预期 ${mmss(-left)}` + (over >= 1.5 ? ` (实际已是预期的 ${over.toFixed(1)} 倍 —— 该说明原因并加时)` : "");
+}
+function etaHtml(s){
+  if(s && s.eta){
+    const e = s.eta, est = e.end0 - e.start;
+    const ext = (e.extends || []).map(x => `+${x.min}分(${esc(x.why)})`).join(" ");
+    return `<div class="etabox${Date.now()/1000 > e.end ? " over" : ""}" data-end="${e.end}" data-start="${e.start}" data-est="${est}"><span class="elab">⏱ <span class="etaT">${etaText(e.end, e.start, est)}</span></span>`
+      + `<span class="ewhat">${esc(e.what)}</span>`
+      + (e.basis ? `<div class="ebasis">依据: ${esc(e.basis)}</div>` : "")
+      + (ext ? `<div class="ebasis">加时: ${ext}</div>` : "") + `</div>`;
+  }
+  if(s && s.eta_missing){
+    const m = s.eta_missing, ago_ = Date.now()/1000 - m.since;
+    return `<div class="etabox miss">⏱ ${m.kind === "tool" ? "工具 " + esc(m.tool || "") + " 已连续跑" : "后台任务已跑"} 约 ${Math.max(1, Math.round(ago_/60))} 分 · <b>没报预期时间</b>(全局规矩: 开跑前 <code>eta.py set</code>)</div>`;
+  }
+  return "";
+}
+function railEta(r, now){
+  const S = STATUS[r.id] || {};
+  if(S.eta){ const L = S.eta.end - now; return `<span class="etab${L < 0 ? " over" : ""}" data-end="${S.eta.end}" title="${esc(S.eta.what)}">⏱${railEtaText(L)}</span>`; }
+  return S.eta_missing ? `<span class="etab miss" title="在长跑但没报预期时间">⏱?</span>` : "";
+}
+// 10-04 用户「每个对话应该显示 x秒 或 x分x秒」: 左栏徽章精确到秒, 每秒走
+function railEtaText(L){ return L >= 0 ? mmss(L) : "超" + mmss(-L); }
+setInterval(() => document.querySelectorAll(".etab[data-end]").forEach(b => {
+  const L = +b.dataset.end - Date.now()/1000;
+  b.textContent = "⏱" + railEtaText(L); b.classList.toggle("over", L < 0);
+}), 1000);
+setInterval(() => document.querySelectorAll(".etabox[data-end]").forEach(b => {
+  const end = +b.dataset.end, t = b.querySelector(".etaT"); if(!t) return;
+  t.textContent = etaText(end, +b.dataset.start, +b.dataset.est);
+  b.classList.toggle("over", Date.now()/1000 > end);
+}), 1000);
+function stHtml(s){ const h = stHtml0(s); return h && etaHtml(s) + goalHtml(s) + h; }
 function stHtml0(s){
   if(!s || s.state === "closed") return "";      // 已关闭的不占地方
   // act_age = jsonl 最后一条记录距今多久(工具级实时);  age = hook 记账距今多久(回合级)
@@ -1096,13 +1208,13 @@ function stHtml0(s){
       doing = `<span class="doing">正在输出: ${esc(s.act_brief)}</span>`;
     else if(s.act_kind === "user")
       doing = `<span class="doing">刚收到你的消息, 还没动手</span>`;
-    return `<div class="st st-running${stale ? " st-stale" : ""}${multi}"><span class="dot">●</span>
+    return `<div class="st st-running${stale ? " st-stale" : ""}${multi}"><span class="dot">${ICO(stale ? "warn" : "run")}</span>
       <span class="lab">${stale ? "正在跑?" : "正在跑"}</span>
       <span class="txt"><b>目标:</b> ${s.goal ? mdLine(s.goal) : "目的未概括"}${doing ? " ｜ " + doing : ""}</span>
       ${fr}</div>${wins}`;
   }
   if(s.state === "waiting")
-    return `<div class="st st-waiting${multi}"><span class="dot">●</span>
+    return `<div class="st st-waiting${multi}"><span class="dot">${ICO("wait")}</span>
       <span class="lab">等你选择</span>
       <span class="txt">${esc(s.note || "Claude 在等你选择")}</span>
       ${fr}</div>${wins}`;
@@ -1110,9 +1222,9 @@ function stHtml0(s){
   // 10-04 用户「模型空闲可回话、但该对话仍有后台子 agent 或后台 shell 在跑」: 单列一种状态
   const bgN = (s.bg || []).length, bgA = (s.bg || []).filter(x => x.kind === "agent").length;
   const bgTxt = bgN ? `后台还在跑 ${bgA ? bgA + " 个子 agent" : ""}${bgA && bgN - bgA ? " + " : ""}${bgN - bgA ? (bgN - bgA) + " 个 shell" : ""}(最久 ${fresh(Math.max(...s.bg.map(x => x.age)))}开的) · ` : "";
-  return `<div class="st st-done${bgN ? " st-bg" : ""}${multi}"><span class="dot">●</span>
+  return `<div class="st st-done${bgN ? " st-bg" : ""}${multi}"><span class="dot">${ICO(bgN ? "bg" : s.sub === "closable" ? "close" : "reply")}</span>
     <span class="lab">${bgN ? "可回话 · 后台在跑" : s.sub === "closable" ? "可以关了" : "等你回复意见"}</span><span class="txt" style="flex:0 0 auto">${bgTxt}</span>
-    <span class="txt">${s.result ? "已完成: " + mdLine(s.result) : "已完成"}</span>
+    <span class="txt">${ICO("done")} ${s.result ? mdLine(s.result) : "已完成"}</span>
     <span class="age">${s.took ? "耗时" + s.took + "s · " : ""}${fresh(a)}</span></div>${wins}`;
 }
 
@@ -1476,7 +1588,7 @@ $("#onlyLive").onchange = () => { render(); paintStatus(); };
 
 // ── 左栏: 跟着 render()(过滤/搜索) 与 paintStatus()(状态推送) 一起重画 ──
 // 10-04 用户「几个类型：正在跑，等你选择，等你回复意见，可以关了」。等你回复意见 / 可以关了 由话题脉络判定(脉络没跟上最新一轮时算等你回复)
-const RAIL_G = [["running","● 正在跑"],["bg","● 可回话 · 后台在跑"],["waiting","● 等你选择"],["reply","● 等你回复意见"],["closable","○ 可以关了"],["closed","已关（最近）"]];
+const RAIL_G = [["running","正在跑","run"],["bg","可回话 · 后台在跑","bg"],["waiting","等你选择","wait"],["reply","等你回复意见","reply"],["closable","可以关了","close"],["closed","已关（最近）","closed"]];
 function railGroup(s){ const st = (s && s.state) || "closed"; return st === "done" ? (s.sub === "closable" ? "closable" : s.sub === "bg" ? "bg" : "reply") : st; }
 let RAIL_SHUT = new Set(["closed"]);
 try{ const v = JSON.parse(localStorage.getItem("railShut")||"null"); if(Array.isArray(v)) RAIL_SHUT = new Set(v); }catch(e){}
@@ -1493,13 +1605,13 @@ function paintRail(){
   const now = Date.now()/1000, by = {};
   const rows = visibleAll().filter(r => !(RAIL_HIDE.has(r.id) && railGroup(STATUS[r.id]) === "closed"));   // 从左栏 ✕ 关掉的: 直接消失, 不挪进「已关」; 之后又被 resume 就重新出现
   rows.forEach(r => { const st = railGroup(STATUS[r.id]); (by[st] = by[st] || []).push(r); });
-  const op = OPENING.map((o, i) => `<div class="it opening"><span class="t">⏳ 正在打开新对话… ${esc(o.cwd || "~")}${o.text ? " · " + esc(o.text.slice(0, 30)) : ""}</span><span class="a op-t" data-i="${i}">${Math.round((Date.now() - o.t0)/1000)}秒</span></div>`).join("");
-  const html = op + `<div class="g all ${FOCUS ? "" : "on"}" data-all="1"><span class="ar"></span><span>${FOCUS ? "← 全部对话" : "全部对话"}</span><span class="n">${rows.length}</span></div>` + RAIL_G.map(([k, name]) => {
+  const op = OPENING.map((o, i) => `<div class="it opening"><span class="t">${ICO("open")} 正在打开新对话… ${esc(o.cwd || "~")}${o.text ? " · " + esc(o.text.slice(0, 30)) : ""}</span><span class="a op-t" data-i="${i}">${Math.round((Date.now() - o.t0)/1000)}秒</span></div>`).join("");
+  const html = op + `<div class="g all ${FOCUS ? "" : "on"}" data-all="1"><span class="ar"></span><span>${FOCUS ? "← 全部对话" : "全部对话"}</span><span class="n">${rows.length}</span></div>` + RAIL_G.map(([k, name, ic]) => {
     const L = by[k] || []; if(!L.length && k !== "running") return "";
     const shut = RAIL_SHUT.has(k);
-    return `<div class="g" data-g="${k}"><span class="ar">${shut?"▸":"▾"}</span><span class="dot-${k}">${name}</span><span class="n">${L.length}</span></div>` +
+    return `<div class="g" data-g="${k}"><span class="ar">${shut?"▸":"▾"}</span><span class="dot-${k}">${ICO(ic)} ${name}</span><span class="n">${L.length}</span></div>` +
       (shut ? "" : L.map(r => `<div class="it ${RAIL_ON===r.id?"on":""}" data-id="${r.id}" title="${esc(railName(r))} ${esc(railTag(r))} · ${esc(r.cwd||"")}">`
-        + `<span class="t">${(STATUS[r.id]||{}).goal_on?`<span class="gl" title="goal 开着: ${esc((STATUS[r.id]||{}).goal_cond||"")}">🎯</span> `:""}${r.star?"★ ":""}${esc(railName(r))} <span class="tg">${esc(railTag(r))}</span></span><span class="a">${ago(now - r.mtime)}</span>`
+        + `<span class="t">${(STATUS[r.id]||{}).goal_on?`<span class="gl" title="goal 开着: ${esc((STATUS[r.id]||{}).goal_cond||"")}">🎯</span> `:""}${r.star?"★ ":""}${esc(railName(r))} <span class="tg">${esc(railTag(r))}</span></span>${railEta(r, now)}<span class="a">${ago(now - r.mtime)}</span>`
         + ((((STATUS[r.id] || {}).wins) || []).length ? `<button class="x" data-x="${r.id}" title="关闭这个对话: 结束 claude 进程, 连它的终端标签页一起关">✕</button>` : "")
         + `</div>`).join(""));
   }).join("") || '<div class="muted" style="padding:8px">没有对话</div>';
@@ -1558,7 +1670,14 @@ async function closeRailTab(id){
     T.done("没关干净, 已放回左栏: " + fails.map(f => "pid " + f[0] + " " + f[1]).join("; "), false);
   }else T.done("关了 ✓「" + nameOf(rec) + "」", true);
 }
+let FOCUS_WANT = null;
 async function setFocus(id){
+  FOCUS_WANT = id;
+  if(id && !TREE_CACHE.has(id)){       // FOCUS 等数据到了再换: 否则等待期间任何重画都会把折叠卡片露出来
+    RAIL_ON = id; paintRail();
+    try{ const d = await (await fetch("/api/tree?id=" + id)).json(); if(!d.error) TREE_CACHE.set(id, d); }catch(e){}
+    if(FOCUS_WANT !== id) return;      // 等的时候又点了别的
+  }
   FOCUS = id; RAIL_ON = id;
   document.body.classList.toggle("focus1", !!id);
   render(); paintStatus(); scrollTo(0, 0);
@@ -1589,14 +1708,10 @@ async function refreshFocus(id){
   addCompose(row);
   if(nearBottom) scrollTo(0, document.body.scrollHeight);
 }
-function addCompose(row){
-  if(row.querySelector(".compose")) return;
-  const c = document.createElement("div"); c.className = "compose";
-  c.innerHTML = `<div class="cwrap"><div class="crow"><textarea placeholder="发给这个对话 · Enter 发送, Shift+Enter 换行(终端只收单行, 换行会变空格) · Ctrl+V 可粘贴图片"></textarea><button class="go">发送</button></div><div class="imgs"></div><div class="cst"></div></div>`;
-  row.appendChild(c);
-  const ta = c.querySelector("textarea"), st = c.querySelector(".cst"), go = c.querySelector(".go"), imgBox = c.querySelector(".imgs");
-  // 10-04 用户「应该支持粘贴图片（像命令行）」: 图存到服务端 uploads/, 发送时消息末尾带「[图片 #n: 路径]」, claude 用 Read 看图
-  const IMGS = [];                     // [{path, url, uploading}]
+// 10-04 用户「应该支持粘贴图片（像命令行）」: 图存到服务端 uploads/, 发送时消息末尾带「[图片 #n: 路径]」, claude 用 Read 看图。
+// 回复框和「＋ 新对话」面板共用(10-04 用户「为什么新对话框不能粘贴图片」)。→ {IMGS, paint, refs()}
+function attachImages(ta, imgBox, st){
+  const IMGS = [];                     // [{path, url}]
   const paintImgs = () => { imgBox.innerHTML = ""; IMGS.forEach((m, i) => {
     const d = document.createElement("div"); d.className = "img";
     d.innerHTML = `<img src="${m.url}"><span class="lb">${m.path ? "#" + (i + 1) : "上传中…"}</span><button class="x" title="去掉">✕</button>`;
@@ -1625,6 +1740,16 @@ function addCompose(row){
     const files = [...(e.dataTransfer && e.dataTransfer.files || [])].filter(f => f.type.startsWith("image/"));
     if(!files.length) return; e.preventDefault(); files.forEach(addImage);
   });
+  const refs = () => IMGS.map((m, i) => `[图片 #${i + 1}: ${m.path}]`).join(" ");
+  return {IMGS, paint: paintImgs, refs};
+}
+function addCompose(row){
+  if(row.querySelector(".compose")) return;
+  const c = document.createElement("div"); c.className = "compose";
+  c.innerHTML = `<div class="cwrap"><div class="crow"><textarea placeholder="发给这个对话 · Enter 发送, Shift+Enter 换行(终端只收单行, 换行会变空格) · Ctrl+V 可粘贴图片"></textarea><button class="go empty" title="发送 (Enter)" aria-label="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></button></div><div class="imgs"></div><div class="cst"></div></div>`;
+  row.appendChild(c);
+  const ta = c.querySelector("textarea"), st = c.querySelector(".cst"), go = c.querySelector(".go"), imgBox = c.querySelector(".imgs");
+  const {IMGS, paint: paintImgs} = attachImages(ta, imgBox, st);
   try{ ta.value = sessionStorage.getItem("draft:" + row.dataset.id) || ""; }catch(e){}
   ta.addEventListener("input", () => { try{ sessionStorage.setItem("draft:" + row.dataset.id, ta.value); }catch(e){} });
   // 10-04 用户「应该有个撤回按钮，以防打错字」: 点发送后先等 UNDO_S 秒(可「撤回」放回输入框 / 「立即发」), 再真打进终端;
@@ -1640,32 +1765,34 @@ function addCompose(row){
     const keptImgs = IMGS.slice();
     const L = (SENT[row.dataset.id] = SENT[row.dataset.id] || []), mine = {text: text.split(/\s+/).join(" "), t: Date.now(), hold: true};
     L.push(mine); renderTree(row.querySelector(".tree"));          // 先画占位轮
+    kick(row.dataset.id, true);                                    // 左栏/状态条立刻挪到「正在跑」
     ta.value = ""; IMGS.length = 0; paintImgs(); try{ sessionStorage.removeItem("draft:" + row.dataset.id); }catch(e){}
     let left = UNDO_S, fired = false;
     const drop = () => { const i = L.indexOf(mine); if(i >= 0) L.splice(i, 1); renderTree(row.querySelector(".tree")); };
     const sec = document.createElement("b");      // 倒计时只改这个数字, 按钮不重建(重建会让鼠标下的按钮闪)
     const paint = () => { st.textContent = "⏳ "; sec.textContent = left; st.append(sec, ` 秒后发出「${mine.text.slice(0, 30)}${mine.text.length > 30 ? "…" : ""}」 `, btn("undo", "↶ 撤回", undo), btn("now", "立即发", fire)); };
     const tk = setInterval(() => { left--; if(left <= 0) fire(); else sec.textContent = left; }, 1000);
-    function undo(){ if(fired) return; fired = true; clearInterval(tk); drop(); restore(raw, keptImgs); st.textContent = "↶ 已撤回, 原文放回输入框了"; }
+    function undo(){ if(fired) return; fired = true; clearInterval(tk); drop(); kick(row.dataset.id, false); restore(raw, keptImgs); st.textContent = "↶ 已撤回, 原文放回输入框了"; }
     async function fire(){
       if(fired) return; fired = true; clearInterval(tk);
       mine.hold = false; mine.t = Date.now(); renderTree(row.querySelector(".tree")); st.textContent = "发送中…";
       let r;
       try{ r = await (await fetch("/api/send", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: row.dataset.id, text})})).json(); }
       catch(e){ r = {ok: false, why: String(e)}; }
-      if(!r.ok){ drop(); restore(raw, keptImgs); st.textContent = "✗ 没发出去(原文已放回输入框): " + (r.why || r.error || "未知"); return; }
+      if(!r.ok){ drop(); kick(row.dataset.id, false); restore(raw, keptImgs); st.textContent = "✗ 没发出去(原文已放回输入框): " + (r.why || r.error || "未知"); return; }
       if(r.mode === "queued"){ mine.queued = true; renderTree(row.querySelector(".tree")); }
       st.textContent = (r.mode === "typed" ? "✓ 已打进终端 " : "✓ 已排队 ") + hhmmss(Date.now()) + " · " + (r.why || "") + " ";
       if(r.mode === "queued" && r.id) st.append(btn("undo", "↶ 撤回", async () => {
         let u; try{ u = await (await fetch("/api/unsend", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: row.dataset.id, mid: r.id})})).json(); }
         catch(e){ u = {ok: false, why: String(e)}; }
-        if(u.ok){ drop(); restore(raw, keptImgs); st.textContent = "↶ " + u.why + ", 原文放回输入框了"; }
+        if(u.ok){ drop(); kick(row.dataset.id, false); restore(raw, keptImgs); st.textContent = "↶ " + u.why + ", 原文放回输入框了"; }
         else st.textContent = "✗ " + (u.why || "撤不回");
       }));
     }
     paint();
   };
   go.onclick = e => { e.stopPropagation(); send(); };
+  { const upd = () => go.classList.toggle("empty", !ta.value.trim() && !imgBox.children.length); ta.addEventListener("input", upd); new MutationObserver(upd).observe(imgBox, {childList: true}); upd(); }
   ta.addEventListener("keydown", e => { if(e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); } });
   c.addEventListener("click", e => e.stopPropagation());
 }
@@ -1680,10 +1807,13 @@ $("#btnNew").onclick = () => {
   $("#npSt").textContent = ""; $("#npText").focus();
 };
 $("#npCancel").onclick = () => { $("#newPanel").hidden = true; };
+const NP_IMG = attachImages($("#npText"), $("#npImgs"), $("#npSt"));
 // 10-04 用户「开对话应该也可以直接回车开始」: 面板里任何位置(目录框、单选、第一句话)回车都开始; 第一句话里 Shift+Enter 换行
 $("#newPanel").addEventListener("keydown", e => { if(e.key === "Enter" && !e.shiftKey && !e.isComposing && !e.target.closest("button")){ e.preventDefault(); $("#npGo").click(); } });
 $("#npGo").onclick = async () => {
-  const cwd = $("#npCwd").value.trim(), text = $("#npText").value.trim(), where = (document.querySelector('[name=npWhere]:checked') || {}).value || "vscode";
+  if(NP_IMG.IMGS.some(m => !m.path)){ $("#npSt").textContent = "图片还在上传, 稍等…"; return; }
+  const imgs = NP_IMG.refs(), keptImgs = NP_IMG.IMGS.splice(0); NP_IMG.paint();
+  const cwd = $("#npCwd").value.trim(), text = ($("#npText").value.trim() + (imgs ? " " + imgs : "")).trim(), where = (document.querySelector('[name=npWhere]:checked') || {}).value || "vscode";
   // 秒开: 面板立刻关掉、输入清空, 马上可以再开下一个; 后台等它起来, 起来了切过去一次
   $("#newPanel").hidden = true; $("#npText").value = ""; $("#npSt").textContent = "";
   const t0 = Date.now(), me = {t0, cwd, text};
@@ -1692,7 +1822,7 @@ $("#npGo").onclick = async () => {
   catch(e){ r = {ok: false, why: String(e)}; }
   OPENING = OPENING.filter(o => o !== me); paintRail();
   if(!r.ok){
-    if(text && !$("#npText").value) $("#npText").value = text;        // 第一句话不丢: 放回面板
+    if(text && !$("#npText").value){ $("#npText").value = text.replace(/\s*\[图片 #\d+: [^\]]+\]/g, "").trim(); NP_IMG.IMGS.push(...keptImgs); NP_IMG.paint(); }   // 第一句话(含图)不丢: 放回面板
     toast("新对话没开成(" + (cwd || "~") + "): " + (r.why || "失败") + (text ? " —— 第一句话已放回「＋ 新对话」面板" : "")).done("新对话没开成: " + (r.why || "失败"), false);
     return;
   }

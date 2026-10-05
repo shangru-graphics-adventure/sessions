@@ -93,6 +93,7 @@ PROV = "～"   # 临时名前缀(10-04 用户: 新对话标签不许停在「cla
 
 def provisional(prompt):
     t = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", prompt or "")).strip()
+    t = re.sub(r"^【[^】]{1,12}】\s*", "", t)          # 「【对话管理器】」「【任务台】」这类来源头不占临时名的 14 个字
     return (PROV + t[:14]) if t and not t.startswith("/") else ""
 
 

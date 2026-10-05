@@ -241,14 +241,27 @@ def cmd_autotitle(a):
         with open(log, "a", encoding="utf-8") as f: f.write("%s autotitle %s %s\n" % (time.strftime("%H:%M:%S"), a.sid[:8], m))
     d = load()
     if chain_of(d, a.sid)[0]: return note("在交接链上, 跳过")
+    early = getattr(a, "early", False)
+    # 10-04: 提问时(--early)先起一版; 第一轮答完再精修 —— 精修只许覆盖「～临时名」或 early 起的那一版, 用户/交接改过的不动
+    ef = Path.home() / ".claude" / "scripts" / "first_prompt_state" / (a.sid + ".early_title")
+    try: early_t = ef.read_text(encoding="utf-8").strip()
+    except OSError: early_t = ""
     deadline = time.time() + 120; s = None
     while time.time() < deadline:
         s = live_sessions().get(a.sid)
         if s and s.get("shell_pid") and user_msgs(a.sid, n=1):
             n = term_name(s["shell_pid"])
             if n is None: return note("没有 VS Code 桥认领这个终端(不在 VS Code 里?), 跳过")
-            if "[" in n and strip_spin(n.split(" [")[0].replace("▶", "")).lower() not in GENERIC and not n.replace("▶", "").strip().startswith("～"): return note("标签已有名字, 跳过: " + n)   # ～开头 = 提问时起的临时名, 照样换
-            t, src = best_title(a.sid, n)
+            core = strip_spin(n.split(" [")[0].replace("▶", ""))
+            if "[" in n and core.lower() not in GENERIC and not n.replace("▶", "").strip().startswith("～") and not (early_t and core == early_t):
+                return note("标签已有名字, 跳过: " + n)   # ～开头 = 提问时起的临时名; early_t = 提问时 haiku 起的那版; 都照样换
+            if early:
+                t = concise_title(a.sid); src = "haiku 简名(提问时)"
+                if not t: return note("提问时 haiku 没起出名字, 留临时名等第一轮答完")
+                try: ef.write_text(t[:40], encoding="utf-8")
+                except OSError: pass
+            else:
+                t, src = best_title(a.sid, n)
             if t and t not in ("未命名对话",):
                 ok, info = rename(s["shell_pid"], "%s [%s(%s)]" % (t[:40], s.get("name") or "?", a.sid[:8]))
                 return note("%s %s %s" % (src, ok, info))
@@ -361,7 +374,8 @@ def concise_title(sid, timeout=90):
            "--settings", str(TITLER / "empty_settings.json"), "--system-prompt", "你是一个标签名生成器。只输出标签名本身，不做任何其他事，不使用任何工具。"]
     try:
         r = subprocess.run(cmd, input=p.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
-                           cwd=str(TITLER if TITLER.exists() else Path.home()), creationflags=NOWIN)
+                           cwd=str(TITLER if TITLER.exists() else Path.home()), creationflags=NOWIN,
+                           env=dict(os.environ, TABNAME_TITLER="1"))        # 起名用的 claude -p 也会触发 UserPromptSubmit hook, 靠它不套娃
     except Exception:
         return ""
     t = r.stdout.decode("utf-8", "replace").split(chr(10))[0].strip().strip('"“”「」\'。. ')
@@ -425,7 +439,7 @@ if __name__ == "__main__":
     p = sp.add_parser("handoff"); p.add_argument("--sid", required=True); p.add_argument("--topic", required=True); p.add_argument("--term-pid", type=int)
     p = sp.add_parser("claim"); p.add_argument("--chain", required=True); p.add_argument("--ver", type=int, required=True); p.add_argument("--term-pid", type=int, required=True); p.add_argument("--after", type=float, required=True); p.add_argument("--old-sid")
     sp.add_parser("refresh"); sp.add_parser("show")
-    p = sp.add_parser("autotitle"); p.add_argument("--sid", required=True)
+    p = sp.add_parser("autotitle"); p.add_argument("--sid", required=True); p.add_argument("--early", action="store_true")
     p = sp.add_parser("nameall"); p.add_argument("--force", action="store_true")
     a = ap.parse_args()
     {"handoff": cmd_handoff, "claim": cmd_claim, "refresh": cmd_refresh, "show": cmd_show, "autotitle": cmd_autotitle, "nameall": cmd_nameall}[a.cmd](a)

@@ -33,7 +33,7 @@ if(out.paste.afterText!==0) bad.push('粘纯文字也出了图');
 if(!(out.paste.imgs===1 && out.paste.label==='#1' && /已存 .*uploads/.test(out.paste.st))) bad.push('粘图不对: '+JSON.stringify(out.paste));
 // 拦截 fetch 看发送的文本, 不真发
 out.sent = await ev(`(async()=>{ let body=null; const F=window.fetch; window.fetch=async(u,o)=>{ if(String(u).includes("/api/send")){ body=JSON.parse(o.body); return new Response(JSON.stringify({ok:false,why:"测试拦截"})); } return F(u,o); };
-  const ta=document.querySelector(".compose textarea"); ta.value="看图"; document.querySelector(".compose .go").click(); await new Promise(r=>setTimeout(r,300)); window.fetch=F; return body && body.text; })()`);
+  const ta=document.querySelector(".compose textarea"); ta.value="看图"; document.querySelector(".compose .go").click(); await new Promise(r=>setTimeout(r,100)); document.querySelector(".compose .ub.now")?.click(); await new Promise(r=>setTimeout(r,300));   /* 10-04 后有 3 s 撤回倒计时, 点「立即发」 */ window.fetch=F; return body && body.text; })()`);
 if(!/^看图 \[图片 #1: C:\/.+\/uploads\/.+\.png\]$/.test(out.sent||'')) bad.push('发送文本没带图片路径: '+out.sent);
 const neg = await (await fetch('http://127.0.0.1:8720/api/paste_image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:'data:text/html;base64,AAAA'})})).json();
 if(neg.ok) bad.push('阳性对照失败: 非图片被收了');

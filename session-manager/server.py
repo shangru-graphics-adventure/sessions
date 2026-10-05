@@ -937,6 +937,17 @@ def status_map(with_activity=True):
                     if bg:
                         row["sub"] = "bg"
                         row["bg"] = bg
+                # 10-04 用户「各个对话有较长计算的能否都给个时间预期，显示到对话管理器上」: 对话自己用 eta.py 上钟
+                e = _json_cached(os.path.join(STATE_DIR, "eta", sid + ".json"))
+                if e and e.get("end") and now - e["end"] < 6 * 3600:
+                    row["eta"] = {"what": e.get("what", ""), "basis": e.get("basis", ""), "start": e.get("start"),
+                                  "end": e["end"], "end0": e.get("end0", e["end"]), "extends": e.get("extends", [])}
+                # 没报预期却在长跑: 工具连续跑 > 60 s, 或空闲但后台任务在跑
+                if "eta" not in row:
+                    if st == "running" and act["kind"] == "tool" and act["ts"] and now - act["ts"] > 60:
+                        row["eta_missing"] = {"kind": "tool", "since": act["ts"], "tool": act["tool"]}
+                    elif row.get("bg"):
+                        row["eta_missing"] = {"kind": "bg", "since": now - max(x["age"] for x in row["bg"])}
                 g = goal_state(fp)
                 if g and g.get("on"):
                     row["goal_on"] = True
@@ -1353,6 +1364,31 @@ JUMP_HTML = ('<div style="position:fixed;right:14px;bottom:14px;display:flex;fle
              + "</div>")
 
 
+def _shell_sealed(shell_pid):
+    """claude 的父进程是不是「密封」的: powershell/pwsh -Command claude… 或 cmd /c claude…(不是交互 shell)。
+    读的是 OS 进程命令行, 与桥的名单互为核对(pid 被复用给一个交互 shell 时这里会是 False)。"""
+    try:
+        import psutil
+        a = [x.lower() for x in psutil.Process(int(shell_pid)).cmdline()]
+    except Exception:
+        return False
+    if not a:
+        return False
+    exe = os.path.basename(a[0])
+    if exe in ("powershell.exe", "powershell", "pwsh.exe", "pwsh"):
+        k = next((i for i, x in enumerate(a) if x in ("-command", "-c")), -1)
+        if k < 0 or "-noexit" in a:
+            return False
+    elif exe in ("cmd.exe", "cmd"):
+        k = next((i for i, x in enumerate(a) if x == "/c"), -1)
+        if k < 0 or "/k" in a:
+            return False
+    else:
+        return False
+    rest = " ".join(a[k + 1:]).strip().strip('"')
+    return rest == "claude" or rest.startswith("claude ") or rest.startswith("codex resume ")
+
+
 def _bridge_type(shell_pid, text):
     """经 VS Code 桥(vscode-bridge 扩展) /type 往 pid=shell_pid 的终端打一行字并回车。8 个端口并行探。→ (ok, 说明)"""
     import urllib.request
@@ -1407,7 +1443,7 @@ def _bridge_enter(shell_pid):
     return False
 
 
-def _confirm_prompt(sid, shell_pid, since, n_chars):
+def _confirm_prompt(sid, shell_pid, since, n_chars, tries=1):
     """10-04(11:35 实发): 长中文句打进输入框后回车被当成粘贴里的换行, 字停在输入框没发出去。
     打字后等对话真收到(UserPromptSubmit); 等不到就补一次回车再等。→ 给网页看的一句说明。"""
     first = min(6.0, 1.5 + n_chars * 0.008)          # 桥那边回车前要等 300 ms + 6 ms/字, 这里多留余量
@@ -1416,14 +1452,16 @@ def _confirm_prompt(sid, shell_pid, since, n_chars):
         if _prompt_seen(sid, since):
             return "对话已收到"
         time.sleep(0.25)
-    if not _bridge_enter(shell_pid):
-        return "未确认收到, 补回车失败(桥可能是旧版, 需 Reload Window) —— 请到终端手动按回车"
-    end = time.time() + 3.0
-    while time.time() < end:
-        if _prompt_seen(sid, since):
-            return "第一次回车没生效, 已补按一次回车, 对话已收到"
-        time.sleep(0.25)
-    return "已补按回车但仍未确认收到 —— 请到终端看一眼"
+    # 10-04 20:16 实发: 新开的对话刚起来(SessionStart 钩子还在跑), 字进了输入框, 回车和补的那一次回车都被吞了 → 新对话多补几次
+    for k in range(tries):
+        if not _bridge_enter(shell_pid):
+            return "未确认收到, 补回车失败(桥可能是旧版, 需 Reload Window) —— 请到终端手动按回车"
+        end = time.time() + 3.0
+        while time.time() < end:
+            if _prompt_seen(sid, since):
+                return "第一次回车没生效, 已补按 %d 次回车, 对话已收到" % (k + 1)
+            time.sleep(0.25)
+    return "已补按 %d 次回车但仍未确认收到 —— 请到终端看一眼" % tries
 
 
 def _relay():
@@ -1478,9 +1516,19 @@ def new_session(cwd, text="", where="vscode"):
     r = {"ok": True, "sid": sid, "pid": pid, "shell_pid": shell, "cwd": cwd, "trusted": trusted}
     text = (text or "").strip()
     if text:
+        t_ready = time.time() + 20                       # 10-04: 等 SessionStart 钩子记过账(=启动钩子跑完、输入框就绪)再多等 1 s; 太早打字回车会被吞
+        while time.time() < t_ready:
+            try:
+                with io.open(os.path.join(STATE_DIR, sid + ".json"), encoding="utf-8") as fh:
+                    if json.load(fh).get("last_event"):
+                        break
+            except Exception:
+                pass
+            time.sleep(0.3)
+        time.sleep(1.0)
         for i in range(30):                              # 刚起来的会话要等它到「空闲」才能收字
             try:
-                r["sent"] = send_to(sid, text)
+                r["sent"] = send_to(sid, text, tries=5)
             except ValueError as e:
                 r["sent"] = {"ok": False, "why": str(e)}
             if r["sent"].get("ok") or "没开着" not in (r["sent"].get("why") or ""):
@@ -1490,9 +1538,9 @@ def new_session(cwd, text="", where="vscode"):
     return r
 
 
-def send_to(sid, text):
+def send_to(sid, text, tries=1):
     """网页输入框发一句话给某会话(10-04 用户「以后和claude聊统一通过对话管理器」A 路线)。
-    空闲 → 经 VS Code 桥 /type 打进它的终端并回车(桥只收单行、须以【开头, 所以换行压成空格、加「【对话管理器】」头);
+    空闲 → 经 VS Code 桥 /type 打进它的终端并回车(桥只收单行, 换行压成空格; 密封终端打原文, 别的终端加「【对话管理器】」头);
     在跑 → 配了 relay 就排队(钩子在下一次工具调用后 / 本轮结束时塞进上下文), 没配就报「等这一轮结束再发」。
     没开着的会话直接报失败; 空闲但打字失败也报失败, 不悄悄排队 —— 网页要的是「发出去了没有」。
     空闲/在跑按 turn_push.status_of 判(与标签 ▶ 同源; 会话文件的 status 有 idle / waiting / busy 三种值)。"""
@@ -1514,7 +1562,13 @@ def send_to(sid, text):
             break
     if not sess:
         return {"ok": False, "why": "这个对话没开着(没有活的 claude 进程) —— 先 Resume"}
-    st = turn_push.status_of(sess, turn_push.states().get(sid)) if turn_push else sess.get("status")
+    T = turn_push.states().get(sid) if turn_push else None
+    st = turn_push.status_of(sess, T) if turn_push else sess.get("status")
+    # 10-04 用户「f1 显示已排队, 实际是可交互等待程序运行」: 这一轮已答完、只剩后台 shell 在跑时, Claude Code 会话文件写 status=shell(提示符可打字),
+    # 而 turn_notify 的 Stop 为保住标签 ▶ 补记了 running → 旧判据走排队, 可没有进行中的轮次, 钩子不触发, 消息卡到后台任务结束。
+    # 会话文件的 shell 不比钩子记录旧(2 s 容差) → 按空闲打进终端。(实测: 前台 Bash 跑时会话文件是 busy, 不是 shell)
+    if sess.get("status") == "shell" and (sess.get("statusUpdatedAt") or sess.get("updatedAt") or 0) / 1000 >= (T or {}).get("ts", 0) - 2:
+        st = "idle"
     if st in ("idle", "waiting"):
         try:
             import psutil
@@ -1524,10 +1578,14 @@ def send_to(sid, text):
         if not shell:
             return {"ok": False, "why": "找不到它所在终端的 shell 进程"}
         t_typed = time.time()
-        ok, why = _bridge_type(shell, "【对话管理器】" + text)
+        # 10-04 密封终端: shell 本身是「-Command claude…」, claude 退出它就退出, 从不读键盘 → 打原文, 不加头(桥那边也核一遍名单)。
+        # 不是密封终端(手动开的老终端) / 旧桥拒收 → 退回带「【对话管理器】」头。
+        ok, why = _bridge_type(shell, text) if _shell_sealed(shell) else (False, "【开头")
+        if not ok and "【开头" in why:
+            ok, why = _bridge_type(shell, "【对话管理器】" + text)
         if not ok:
             return {"ok": False, "why": "打字失败: " + why}
-        why += "; " + _confirm_prompt(sid, shell, t_typed, len(text))
+        why += "; " + _confirm_prompt(sid, shell, t_typed, len(text), tries)
         R = _relay()
         if R:
             R.log_sent(sid, dict(ts=time.strftime("%Y-%m-%dT%H:%M:%S"), frm="对话管理器", text=text, mode="typed"))
@@ -1799,6 +1857,10 @@ def do_resume(sid, cwd, terminal="type", prefer_existing=True, dry_run=False):
 
 # ---------------------------------------------------------------- HTTP
 
+TS_OWNER = (config._cfg.get("ts_owner") or "<未配置 ts_owner, 拒绝转发>").lower()   # tailscale serve 转发时只认本人
+TS_HOST = config._cfg.get("ts_host") or "ts-host.invalid"
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1817,9 +1879,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _denied(self, post=False):
+        """2026-10-04 手机版: `tailscale serve` 从 127.0.0.1 转发 tailnet 请求 —— 只认本人 Tailscale 账号;
+        浏览器跨站 POST 一律拒(防别的网页借身份往对话里打字 / 开对话 / 关进程)。"""
+        login = self.headers.get("Tailscale-User-Login")
+        if (login is not None or self.headers.get("X-Forwarded-For")) and (login or "").lower() != TS_OWNER:
+            return "只认本人 Tailscale 账号"
+        if post:
+            o = self.headers.get("Origin")
+            if o and not re.fullmatch(r"https?://(127\.0\.0\.1|localhost|\[::1\]|%s)(:\d+)?" % re.escape(TS_HOST), o):
+                return "拒绝跨站请求: " + o
+        return None
+
     def do_GET(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
+        why = self._denied()
+        if why:
+            return self._send(403, {"error": why})
+
+        if u.path in ("/icon.svg", "/icon-180.png", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/favicon.ico"):   # 10-04 图标
+            fn = "icon.svg" if u.path in ("/icon.svg", "/favicon.ico") else "icon-180.png"
+            with open(os.path.join(HERE, fn), "rb") as fh:
+                return self._send(200, fh.read(), "image/svg+xml" if fn.endswith(".svg") else "image/png")
+        if u.path == "/manifest.webmanifest":
+            return self._send(200, {"name": "Claude 对话管理器", "short_name": "对话", "start_url": "/m", "display": "standalone",
+                                    "background_color": "#f6f8fb", "theme_color": "#4a8bd6",
+                                    "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"},
+                                              {"src": "/icon-180.png", "sizes": "180x180", "type": "image/png"}]},
+                              "application/manifest+json; charset=utf-8")
+
+        mobile = u.path in ("/m", "/m.html") or (u.path in ("/", "/index.html") and "desktop" not in q
+                 and re.search(r"iPhone|Android.*Mobile|Mobile Safari", self.headers.get("User-Agent") or ""))
+        if mobile:                                    # 10-04 用户「对话管理器也应该有手机版」: 手机打开首页直接给手机版(?desktop=1 看桌面版)
+            with io.open(os.path.join(HERE, "m.html"), encoding="utf-8") as fh:
+                return self._send(200, fh.read(), "text/html; charset=utf-8")
 
         if u.path in ("/", "/index.html"):
             try:
@@ -1834,6 +1928,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, fh.read(), "text/javascript; charset=utf-8")
             except Exception as e:
                 return self._send(404, "md.js 读不到: %s" % e, "text/plain; charset=utf-8")
+
+        if u.path == "/icons.js":                            # 10-04: 状态小图标(管理器与手机版共用)
+            with io.open(os.path.join(HERE, "icons.js"), encoding="utf-8") as fh:
+                return self._send(200, fh.read(), "text/javascript; charset=utf-8")
 
         if u.path == "/xref.js":                             # 10-04: 对话文字自动链接(编号/网址/路径/缩写)
             with io.open(os.path.join(HERE, "xref.js"), encoding="utf-8") as fh:
@@ -1948,6 +2046,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        why = self._denied(post=True)
+        if why:
+            return self._send(403, {"ok": False, "why": why})
         ln = int(self.headers.get("Content-Length", 0))
         try:
             data = json.loads(self.rfile.read(ln).decode("utf-8")) if ln else {}
@@ -2155,7 +2256,7 @@ def main():
     load_cache()
     prune_states()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    # 环回**双栈**监听(2026-08-29 实测, 看盘 8080 上量到的同一个缺陷):
+    # 环回**双栈**监听(2026-08-29 实测, 另一个本地服务 8080 上量到的同一个缺陷):
     # 本机 `localhost` 解析出 **::1 排在 127.0.0.1 前面**, 只绑 IPv4 时每个新连接
     # 都要先试 IPv6 失败再回落 —— 实测 python urlopen 2.04s / 浏览器导航
     # connect 303ms、ttfb 311ms; 补上 ::1 之后 ttfb 6.8ms(45x), 连接数 110→1。

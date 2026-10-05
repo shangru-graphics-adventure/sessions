@@ -17,6 +17,25 @@ const http = require("http");
 
 let server = null;
 
+// 10-04 用户「每次插入一个【对话管理器】也太丑了…一定有什么办法是可以完美解决的」: 密封终端。
+// 终端进程本身就是「powershell -Command claude …」, 不是交互 shell 里敲 claude —— claude 一退出 powershell 跟着退出,
+// 中间从不读键盘, 往里打的字不可能被当成 shell 命令执行。/type 对密封终端不要求「【」开头。
+// 名单落盘 {pid: 起的时刻}, 多个 VS Code 窗口共用一个文件, 每次读-改-写合并; 管理器发字前还会核 shell 命令行(防 pid 复用)。
+const fs = require("fs"), path = require("path"), os = require("os");
+const SEALED_FILE = path.join(os.homedir(), ".claude", "scripts", "sealed_terminals.json");
+function sealedRead() { try { return JSON.parse(fs.readFileSync(SEALED_FILE, "utf8")) || {}; } catch (e) { return {}; } }
+function sealedEdit(pid, add) {
+  const d = sealedRead(); if (add) d[String(pid)] = Date.now(); else delete d[String(pid)];
+  try { fs.writeFileSync(SEALED_FILE, JSON.stringify(d)); } catch (e) {}
+}
+function isSealed(pid) { return Object.prototype.hasOwnProperty.call(sealedRead(), String(pid)); }
+function sealedLaunch(cmd) {
+  const sh = String(vscode.env.shell || "");
+  if (/(^|[\\/])(powershell|pwsh)(\.exe)?$/i.test(sh)) return { shellPath: sh, shellArgs: ["-NoLogo", "-Command", cmd] };
+  if (/(^|[\\/])cmd(\.exe)?$/i.test(sh)) return { shellPath: sh, shellArgs: ["/d", "/c", cmd] };
+  return null;                                   // 认不出的默认 shell: 退回老办法(交互 shell 里敲), 不算密封
+}
+
 function json(res, code, obj) {
   const body = Buffer.from(JSON.stringify(obj), "utf8");
   res.writeHead(code, {
@@ -196,7 +215,7 @@ async function handle(req, res) {
       vscode: vscode.version,
       pid: process.pid,
       windowTitle: (vscode.workspace.workspaceFolders || []).map((f) => f.name),
-      routes: ["terminals", "new", "rename", "place", "sort", "show", "close", "type", "type2", "type3", "enter"], layout: "wait-above-run-below",
+      routes: ["terminals", "new", "rename", "place", "sort", "show", "close", "type", "type2", "type3", "enter", "sealed"], layout: "wait-above-run-below",
     });
   }
   if (url === "/terminals") {
@@ -221,6 +240,8 @@ async function handle(req, res) {
     // 要静态名才传 staticName:true; 平时标签名由 ~/.claude/scripts/tab_title.py 写控制台标题。
     let opts = body.staticName && body.name ? { name: String(body.name) } : {};
     if (body.cwd) opts.cwd = String(body.cwd);
+    const seal = body.seal === false ? null : sealedLaunch(cmd);
+    if (seal) Object.assign(opts, seal);
     let t;
     try {
       t = vscode.window.createTerminal(opts);
@@ -228,14 +249,15 @@ async function handle(req, res) {
       return json(res, 200, { ok: false, why: "建不出终端: " + String(e) });
     }
     t.show();
-    t.sendText(cmd, true);
+    if (!seal) t.sendText(cmd, true);
     let pid = null;
     try {
       pid = await t.processId;
     } catch (e) {
       pid = null;
     }
-    return json(res, 200, { ok: true, pid: pid, name: t.name });
+    if (seal && pid) sealedEdit(pid, true);
+    return json(res, 200, { ok: true, pid: pid, name: t.name, sealed: !!(seal && pid) });
   }
   if (url === "/rename") {
     // 把某个终端标签改名(例如改成 Claude 会话名, 形如 <用户名>-e9)。
@@ -284,7 +306,7 @@ async function handle(req, res) {
     const text = String(body.text || "");
     if (!pid || !text) return json(res, 400, { ok: false, why: "need pid and text" });
     if (text.indexOf("\n") >= 0 || text.indexOf("\r") >= 0 || text.length > 4000) return json(res, 400, { ok: false, why: "只收单行且 ≤4000 字" });
-    if (!text.startsWith("【")) return json(res, 400, { ok: false, why: "消息必须以【开头" });
+    if (!text.startsWith("【") && !isSealed(pid)) return json(res, 400, { ok: false, why: "不是密封终端(底下是交互 shell), 消息必须以【开头" });
     const t = await findByPid(pid);
     if (!t) return json(res, 200, { ok: false, why: "这个窗口里没有 pid 为 " + pid + " 的终端" });
     // 10-04 用户「从网页开vs控制台，没发出去，只是换行了」: sendText(text, true) 把字和回车放在同一块里写进 pty,
@@ -374,6 +396,7 @@ function activate(context) {
   context.subscriptions.push(
     // 新开的终端默认排在末尾 = 分割线下面; 它是新对话(在跑), 挪回分割线上面
     vscode.window.onDidCloseTerminal((t) => {
+      Promise.resolve(t.processId).then((p) => { if (p && isSealed(p)) sealedEdit(p, false); }, () => {});
       const i = running.indexOf(t);
       if (i >= 0) { running.splice(i, 1); saveRunning(); }
     }),

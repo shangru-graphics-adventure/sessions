@@ -12,6 +12,7 @@ import re
 import subprocess
 
 PREVIEW_MAX = 8 * 1024 * 1024      # 超过这个就不读了, 只报大小
+HTML_MAX = 64 * 1024 * 1024        # 10-04: 自包含网页(内嵌数据的查看器)常超 8MB, 浏览器直接开得动, 单给上限
 CSV_ROWS = 400                     # csv 最多渲染多少行
 
 # 大块中间数据: 不预览, 只报大小(与 server.ART_DATA_EXT 保持一致)
@@ -148,7 +149,7 @@ def preview_html(fp):
     except OSError as e:
         return CSS + hdr + "<p>读不到: %s</p>" % esc(str(e))
     ext = os.path.splitext(fp)[1].lower()
-    if ext in DATA_EXT or sz > PREVIEW_MAX:
+    if ext in DATA_EXT or sz > (HTML_MAX if ext in (".html", ".htm") else PREVIEW_MAX):
         return (CSS + hdr + "<p class=dim>%s, %.1f MB &mdash; 这类文件不在浏览器里"
                 "预览, 用列表里的 &#8982; 在资源管理器里定位。</p>"
                 % (ext or "无后缀", sz / 1048576.0))

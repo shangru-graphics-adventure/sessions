@@ -434,7 +434,7 @@ WT 里每个标签的 shell 名下挂着一个类名 `PseudoConsoleWindow` 的 0
 
 ```
 ⚠ 同一个对话开在 2 个窗口里 — 它们写同一份记录会互相覆盖, 请关到只剩一个:
-   [◐ 看盘工具重构  pid 11240  ⇥ 切过去  ✕ 关闭] [◑ 看盘工具重构  pid 31728  ⇥ 切过去  ✕ 关闭]
+   [◐ 登录页重构  pid 11240  ⇥ 切过去  ✕ 关闭] [◑ 登录页重构  pid 31728  ⇥ 切过去  ✕ 关闭]
 ```
 
 ### ✕ 关闭做了什么(以及故意没做什么)
@@ -461,7 +461,7 @@ WT 里每个标签的 shell 名下挂着一个类名 `PseudoConsoleWindow` 的 0
 
 ```json
 "procs": [{"pid": 11240, "pid_ctime": 1787511544.5, "term_pid": 13108,
-           "term_name": "WindowsTerminal.exe", "hwnd": 65946, "win_title": "◐ 看盘工具重构"}]
+           "term_name": "WindowsTerminal.exe", "hwnd": 65946, "win_title": "◐ 登录页重构"}]
 ```
 
 多个窗口共用一个 session_id, 写的是同一个 state 文件, 所以**必须是数组** —— 只留一个 pid 的话
